@@ -1,0 +1,44 @@
+{
+  "name": "stickies-mcp",
+  "version": "0.8.0",
+  "description": "A persistent sticky-note layer for Claude Code, exposed as an MCP server.",
+  "type": "module",
+  "author": "dumbspacecookie",
+  "license": "MIT",
+  "homepage": "https://github.com/dumbspacecookie/stickies",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dumbspacecookie/stickies.git"
+  },
+  "bin": {
+    "stickies": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.js",
+    "cli": "node --disable-warning=ExperimentalWarning src/cli.js",
+    "dashboard": "node --disable-warning=ExperimentalWarning src/dashboard.js",
+    "demo": "node --disable-warning=ExperimentalWarning demo/showcase.mjs",
+    "test": "node --disable-warning=ExperimentalWarning test/redteam.mjs && node --disable-warning=ExperimentalWarning test/autocapture-test.mjs && node --disable-warning=ExperimentalWarning test/turn-boundary-test.mjs && node --disable-warning=ExperimentalWarning test/todo-global-test.mjs && node --disable-warning=ExperimentalWarning test/dashboard-test.mjs && node --disable-warning=ExperimentalWarning test/sync-test.mjs && node --disable-warning=ExperimentalWarning test/git-sync-test.mjs && node --disable-warning=ExperimentalWarning test/project-key-test.mjs && node --disable-warning=ExperimentalWarning test/auto-sync-test.mjs && node --disable-warning=ExperimentalWarning test/migration-test.mjs && node --disable-warning=ExperimentalWarning test/resilience-test.mjs && node --disable-warning=ExperimentalWarning test/notify-test.mjs && node --disable-warning=ExperimentalWarning test/strip-claudemd-test.mjs",
+    "test:security": "node --disable-warning=ExperimentalWarning test/redteam.mjs",
+    "test:mcp": "node test/mcp-smoke.mjs",
+    "test:autocapture": "node --disable-warning=ExperimentalWarning test/autocapture-test.mjs",
+    "test:turnboundary": "node --disable-warning=ExperimentalWarning test/turn-boundary-test.mjs",
+    "test:todoglobal": "node --disable-warning=ExperimentalWarning test/todo-global-test.mjs",
+    "test:dashboard": "node --disable-warning=ExperimentalWarning test/dashboard-test.mjs",
+    "test:sync": "node --disable-warning=ExperimentalWarning test/sync-test.mjs",
+    "test:gitsync": "node --disable-warning=ExperimentalWarning test/git-sync-test.mjs",
+    "test:projectkey": "node --disable-warning=ExperimentalWarning test/project-key-test.mjs",
+    "test:autosync": "node --disable-warning=ExperimentalWarning test/auto-sync-test.mjs",
+    "test:migration": "node --disable-warning=ExperimentalWarning test/migration-test.mjs",
+    "test:resilience": "node --disable-warning=ExperimentalWarning test/resilience-test.mjs",
+    "test:notify": "node --disable-warning=ExperimentalWarning test/notify-test.mjs && node --disable-warning=ExperimentalWarning test/strip-claudemd-test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "commander": "^13.1.0",
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

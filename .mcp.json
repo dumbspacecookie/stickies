@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "stickies": {
+      "command": "node",
+      "args": ["--disable-warning=ExperimentalWarning", "${CLAUDE_PLUGIN_ROOT}/src/server.js"]
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "stickies",
+  "owner": {
+    "name": "dumbspacecookie"
+  },
+  "metadata": {
+    "description": "Stickies — a small, deterministic, expiring sticky-note layer for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "stickies",
+      "source": "./",
+      "description": "Persistent sticky notes for Claude Code: zero-turn capture, importance-graded digest, per-project + global scope, TTL expiry, local dashboard, opt-in git sync."
+    }
+  ]
+}

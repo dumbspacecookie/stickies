@@ -1,0 +1,11 @@
+{
+  "name": "stickies",
+  "displayName": "Stickies",
+  "version": "0.8.0",
+  "description": "A persistent sticky-note layer for Claude Code. Claude writes durable facts (decisions, blockers, preferences, context, todos) during a session; they survive resets and are injected back into context on the next start.",
+  "author": {
+    "name": "dumbspacecookie"
+  },
+  "homepage": "https://github.com/dumbspacecookie/stickies",
+  "license": "MIT"
+}
