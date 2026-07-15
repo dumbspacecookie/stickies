@@ -1,6 +1,7 @@
 {
   "name": "stickies-mcp",
   "version": "0.9.0",
+  "mcpName": "io.github.dumbspacecookie/stickies",
   "description": "A persistent sticky-note layer for Claude Code, exposed as an MCP server.",
   "type": "module",
   "author": "dumbspacecookie",
@@ -10,8 +11,21 @@
     "type": "git",
     "url": "https://github.com/dumbspacecookie/stickies.git"
   },
+  "files": [
+    "src",
+    "hooks",
+    "commands",
+    ".claude-plugin",
+    ".mcp.json",
+    "README.md",
+    "USAGE.md",
+    "SECURITY.md",
+    "PHONE.md",
+    "LICENSE"
+  ],
   "bin": {
-    "stickies": "./src/cli.js"
+    "stickies": "./src/cli.js",
+    "stickies-mcp": "./src/server.js"
   },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/server.js",

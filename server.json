@@ -1,0 +1,41 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.dumbspacecookie/stickies",
+  "description": "Persistent, expiring, importance-graded sticky notes for Claude Code.",
+  "repository": {
+    "url": "https://github.com/dumbspacecookie/stickies",
+    "source": "github"
+  },
+  "version": "0.9.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "stickies-mcp",
+      "version": "0.9.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "STICKIES_DB",
+          "description": "Path to the SQLite store (default ~/.stickies/stickies.db).",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "STICKIES_DISCORD_WEBHOOK",
+          "description": "Optional Discord webhook URL to mirror sticky lifecycle events.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "STICKIES_SYNC_REPO",
+          "description": "Path to a git clone you own, used as the opt-in cross-machine sync store.",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
