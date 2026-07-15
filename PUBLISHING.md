@@ -13,7 +13,7 @@ Prereqs: Node ≥ 22.5, an [npmjs.com](https://www.npmjs.com) account, and the G
 The registry only stores metadata — the package itself lives on npm.
 
 ```powershell
-cd C:\Users\ash\Documents\4_Experiment\stickies-public
+cd path\to\stickies            # your local clone of this repo
 npm login                      # once, opens browser
 npm publish --access public    # publishes stickies-mcp@0.9.0
 ```
