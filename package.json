@@ -9,7 +9,7 @@
   "homepage": "https://github.com/dumbspacecookie/stickies",
   "repository": {
     "type": "git",
-    "url": "https://github.com/dumbspacecookie/stickies.git"
+    "url": "git+https://github.com/dumbspacecookie/stickies.git"
   },
   "files": [
     "src",
@@ -24,8 +24,8 @@
     "LICENSE"
   ],
   "bin": {
-    "stickies": "./src/cli.js",
-    "stickies-mcp": "./src/server.js"
+    "stickies": "src/cli.js",
+    "stickies-mcp": "src/server.js"
   },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/server.js",
