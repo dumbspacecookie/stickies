@@ -1,7 +1,11 @@
-# Stickies from the phone — parked research
+# Stickies from the phone — the research behind repo-mode
 
-**Not built. Not needed yet.** Get the local loop solid first ([USAGE.md](USAGE.md)). This
-file exists so the research isn't lost.
+**Update (2026-07): Option B is BUILT — it shipped as [repo-mode](README.md#repo-mode-cloud--mobile).**
+The open question below was spiked and resolved (a cloud sandbox's git auth is scoped to the one
+repo it cloned, so a second private store is unreachable — verified empirically). The answer drove
+the design: repo-mode keeps the store *inside the project repo* and converges session branches into
+`main` with a bundled GitHub Action. This file is kept as the reasoning trail; **Option A** below
+(Remote Control) is still the simplest way to drive the real local plugin from a phone.
 
 ## The thing that trips everyone up
 
@@ -55,10 +59,13 @@ few terminal-UI commands (`/plugin`, `/resume`) are local-only.
 - Starting an **ultraplan** session disconnects Remote Control — they compete for the same
   claude.ai/code surface.
 
-## Option B — make Stickies cloud-native (a real build)
+## Option B — make Stickies cloud-native (BUILT — this is repo-mode)
 
-To run inside an actual cloud session, Stickies must stop being a user-scope plugin with a
-local DB and become **repo-scoped, with git-backed JSON as the store**:
+> This section is the original design reasoning. It shipped as
+> [repo-mode](README.md#repo-mode-cloud--mobile) — install with `stickies init-repo`.
+
+To run inside an actual cloud session, Stickies stops being a user-scope plugin with a
+local DB and becomes **repo-scoped, with a committed JSON store**:
 
 1. **Commit the plugin into the repo.** The cloud VM only sees repo files. Hooks must be
    declared in the repo's `.claude/settings.json` (user-level hooks don't carry over), the MCP
@@ -70,15 +77,15 @@ local DB and become **repo-scoped, with git-backed JSON as the store**:
    ephemeral VM is a scratch file, not storage.)
 3. **Resolve the open question below first.**
 
-### ⚠️ The known unknown — spike this before designing anything
+### ✅ The known unknown — RESOLVED (2026-07)
 
 A cloud session's git auth is brokered through an Anthropic proxy and scoped to **the repo it
-cloned, pushing only to the current branch**. Whether a sandbox can clone *and push to a
-second, unrelated private repo* (`stickies-data`) is **not documented and has not been
-verified.**
+cloned, pushing only to the current branch**. Whether a sandbox could clone *and push to a
+second, unrelated private repo* (`stickies-data`) was the blocking question — **now answered
+empirically: no.** A sibling private repo returns 401 (read) / a broker-authored 403 (write);
+only the cloned repo is authenticated. (Evidence lived in the `spike/` probe + FINDINGS.)
 
-If it can't, Option B's store must live **inside each project repo** (say `.stickies/notes.json`,
-committed) — which works, but splits notes per-repo, puts them in git history, and gives up the
-single shared board that makes the tool good.
-
-**The answer to that one question determines the entire architecture.** Spike it first.
+So the store lives **inside each project repo** (`.stickies/notes.json`, committed). It's
+per-repo, but the `stickies-sync` GitHub Action converges every session's `claude/*` branch
+into `main`, so within a repo you still get one board. The cross-*repo* shared board stays a
+desktop feature (the user-scope plugin) until a non-git channel (GitHub API + token) is spiked.

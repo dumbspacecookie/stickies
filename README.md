@@ -34,7 +34,7 @@ the only thing that ever touches the network.
 | Terminal (Claude Code) | ✅ full loop | plugin: hooks + commands + MCP |
 | Claude Desktop (Windows/Mac) | ✅ read/write | MCP tools only — no hooks, pass the project path |
 | iPhone / web | ✅ full loop **via Remote Control** | run `claude remote-control` on your machine; the phone drives that local session (nothing to build) |
-| iPhone / web (cloud sandbox) | 🔨 not built | needs a repo-scoped rebuild; blocked on an unverified question (see PHONE.md) |
+| iPhone / web (cloud sandbox) | ✅ full loop **via repo-mode** | `stickies init-repo` commits a store + hooks into the repo; notes persist and converge to `main` (see [repo-mode](#repo-mode-cloud--mobile)) |
 | Anywhere, read-only | ✅ | Discord session report |
 
 ## Components
@@ -53,6 +53,7 @@ the only thing that ever touches the network.
 | Project identity | `src/project-key.js`, `src/store-path.js` | machine-independent project key (git remote, else path) |
 | Digest | `src/digest.js` | digest formatting; one-time cleanup of the deprecated CLAUDE.md managed section |
 | Redaction | `src/redact.js` | scrubs secrets from content on write |
+| Repo-mode | `src/repo-mode/` (`engine.mjs`, `install.js`, `stickies-sync.yml`) | cloud/mobile-native: committed store + hooks + reconcile Action; installed by `stickies init-repo` |
 
 ## Auto-capture directive
 
@@ -103,6 +104,33 @@ MCP tools — add to `claude_desktop_config.json` (`%APPDATA%\Claude\` on Window
 
 Both clients read the same `~/.stickies/stickies.db`, so notes written in one are visible
 in the other with no sync step.
+
+## Repo-mode (cloud / mobile)
+
+The plugin above is **user-scoped** — it lives in `~/.claude`, so it does not exist in a cloud
+session (the iPhone app / claude.ai/code run in an ephemeral VM that only sees files committed in
+the repo it cloned). **Repo-mode** makes Stickies work there, with no plugin and nothing to install:
+
+```sh
+stickies init-repo                 # in the repo you want notes in
+# or: node src/cli.js init-repo /path/to/repo
+```
+
+That commits a self-contained, zero-dependency engine and wires it up:
+
+- `.stickies/notes.json` — the store (source of truth) + a human-readable `.stickies/NOTES.md` mirror
+- `.claude/settings.json` — a SessionStart hook (injects the digest) and a Stop hook (captures `!!sticky …`)
+- `CLAUDE.md` — teaches Claude the `!!sticky` convention (the plugin's MCP instructions aren't present in the cloud)
+- `.github/workflows/stickies-sync.yml` — converges notes from every session branch into `main`
+
+In a cloud session Claude reads the repo's notes at start and captures new ones into
+`.stickies/notes.json`; because that's committed, the note survives the disposable VM. Cloud
+sessions write to their own `claude/*` branch, so the bundled GitHub Action merges each note into
+`main` (union + dismiss-wins + dedupe) — one converged board per repo, hands-off. Secrets are
+redacted before the store and before Discord, exactly as in the local plugin.
+
+Repo-mode is **per-repo** (notes live in that repo). The user-scope plugin remains the way to get
+the cross-project shared board on your desktop. Both use the same `!!sticky` grammar and redaction.
 
 ## Dashboard
 

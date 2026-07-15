@@ -18,7 +18,9 @@
 const CATEGORY = '(decision|blocker|preference|context|todo)';
 // One modifier blob (importance / `global` / #tags in any order), parsed out below —
 // an ordered grammar would silently ignore `global P1` while accepting `P1 global`.
-const MODIFIER = String.raw`(?:P[123]|global|#[\w./-]+)`;
+// Importance may arrive bracketed (`[P2]`) because the model often copies the
+// `[P1|P2|P3]` notation from the convention doc literally — tolerate it.
+const MODIFIER = String.raw`(?:\[?P[123]\]?|global|#[\w./-]+)`;
 const DIRECTIVE = new RegExp(
   String.raw`^\s*!!sticky\s+${CATEGORY}` + //   category
     String.raw`((?:\s+${MODIFIER})*)` + //      optional modifiers, any order
@@ -39,7 +41,7 @@ export function parseDirectives(text) {
     const category = m[1].toLowerCase();
     const modifiers = (m[2] || '').split(/\s+/).filter(Boolean);
 
-    const importance = (modifiers.find((t) => /^P[123]$/i.test(t)) || 'P2').toUpperCase();
+    const importance = (modifiers.find((t) => /^\[?P[123]\]?$/i.test(t)) || 'P2').replace(/[[\]]/g, '').toUpperCase();
     const global = modifiers.some((t) => /^global$/i.test(t));
     const tags = modifiers.filter((t) => t.startsWith('#')).map((t) => t.slice(1).trim()).filter(Boolean);
 

@@ -1,0 +1,43 @@
+# Stickies reconciliation — converge every cloud session's notes into one board.
+#
+# Cloud sessions can only push to their own claude/* branch, never to main. This
+# workflow runs when such a branch pushes a note change, merges just that note into
+# main via the repo's own engine (union + dismiss-wins + dedupe), and pushes main.
+# The result: notes written from any device end up on a single board automatically.
+#
+# Installed by `stickies init-repo`. Only ever touches .stickies/ — never your code.
+name: stickies-sync
+on:
+  push:
+    branches:
+      - 'claude/**'
+      - 'stickies/**'
+    paths:
+      - '.stickies/notes.json'
+permissions:
+  contents: write
+concurrency:
+  group: stickies-sync        # serialize merges so two branches can't race main
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Merge notes from ${{ github.ref_name }} into main
+        run: |
+          set -e
+          # The triggering branch isn't reachable from main — fetch it, then read its store.
+          git fetch --no-tags origin "${{ github.ref_name }}"
+          git show "origin/${{ github.ref_name }}:.stickies/notes.json" > /tmp/incoming.json 2>/dev/null || { echo "no notes on branch"; exit 0; }
+          node .stickies/engine.mjs reconcile /tmp/incoming.json
+          if git diff --quiet -- .stickies/; then
+            echo "no change after reconcile"; exit 0
+          fi
+          git config user.name  "stickies-bot"
+          git config user.email "stickies@users.noreply.github.com"
+          git add .stickies/
+          git commit -m "stickies: reconcile notes from ${{ github.ref_name }}"
+          git push origin HEAD:main

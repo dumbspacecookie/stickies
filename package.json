@@ -1,6 +1,6 @@
 {
   "name": "stickies-mcp",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "A persistent sticky-note layer for Claude Code, exposed as an MCP server.",
   "type": "module",
   "author": "dumbspacecookie",

@@ -258,6 +258,24 @@ program
     process.exitCode = r.ok ? 0 : 1;
   });
 
+// stickies init-repo — install repo-mode (committed store + hooks) into a project
+// repo so notes work inside cloud/mobile sessions where the plugin is absent.
+program
+  .command('init-repo')
+  .description('Install repo-mode into a project so stickies works in cloud/mobile sessions.')
+  .argument('[path]', 'Target repo directory (defaults to cwd).', '.')
+  .action(async (path) => {
+    const { installRepoMode } = await import('./repo-mode/install.js');
+    const { root, steps } = installRepoMode(path);
+    console.log(`Installed stickies repo-mode into ${root}:`);
+    for (const s of steps) console.log(`  + ${s}`);
+    console.log(
+      '\nCommit the .stickies/ and .claude/settings.json files. In any session on this\n' +
+        'repo, Claude captures `!!sticky …` lines into .stickies/notes.json and shows them\n' +
+        'at the next start. For Discord in cloud sessions, set STICKIES_DISCORD_WEBHOOK there.'
+    );
+  });
+
 program.parseAsync(process.argv).catch((err) => {
   console.error(err.message);
   process.exit(1);
