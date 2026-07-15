@@ -16,6 +16,7 @@ for (const suffix of ['', '-wal', '-shm']) {
 import { createSticky, readStickies, dismissSticky } from '../src/store.js';
 import { buildDigest, upsertManagedSection, START_MARKER, END_MARKER } from '../src/digest.js';
 import { getDb } from '../src/db.js';
+import { redactSecrets } from '../src/redact.js';
 
 let vuln = 0;
 const ok = (m) => console.log('  PASS       ', m);
@@ -103,4 +104,44 @@ console.log('\n[5] Secret-at-rest handling');
   else ok('secret redacted before storage');
 }
 
+// ── 6. Secret redaction coverage (redactSecrets unit) ───────────────────────
+console.log('\n[6] Secret redaction coverage');
+{
+  // [input, a substring that must NOT survive] — real-world leak vectors.
+  const leaks = [
+    ['DB_PASSWORD=SuperSecret123', 'SuperSecret123'],
+    ['export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY', 'wJalrXUtnFEMI'],
+    ['MY_API_KEY=abcdef123456', 'abcdef123456'],
+    ['postgres://admin:S3cr3tPss@db.example.com:5432/prod', 'S3cr3tPss'],
+    ['mongodb+srv://user:hunter2pass@cluster0.mongodb.net', 'hunter2pass'],
+    ['redis://:mypassword123@10.0.0.5:6379', 'mypassword123'],
+    ['STRIPE_SECRET=sk_live_abcdefghij0123456789', 'sk_live_abcdefghij'],
+    ['npm token is npm_abcdefghijklmnopqrstuvwxyz0123456789', 'npm_abcdefghij'],
+    ['SG.abcdefghijklmnop.qrstuvwxyz0123456789ABCD', 'SG.abcdefghij'],
+    ['hook https://hooks.slack.com/services/T00000/B00000/XXXXXXXXXXXX', 'hooks.slack.com/services/T00000'],
+    ['{"apiKey":"a1b2c3d4e5f6g7h8i9j0"}', 'a1b2c3d4e5f6g7h8i9j0'],
+    ['password = correct horse battery staple', 'horse battery staple'],
+  ];
+  let leaked = 0;
+  for (const [input, needle] of leaks) {
+    const { text, redacted } = redactSecrets(input);
+    if (!redacted || text.includes(needle)) { bad(`redaction missed: ${input}  ->  ${text}`); leaked++; }
+  }
+  if (!leaked) ok(`all ${leaks.length} secret vectors redacted`);
+
+  // Must NOT over-redact ordinary prose (false-positive guard).
+  const benign = ['tokenizer_config: gpt2', 'the access key rotation happened last week', 'my secret santa gift list', 'see the readme for setup'];
+  let fp = 0;
+  for (const b of benign) {
+    if (redactSecrets(b).redacted) { bad(`false-positive redaction: ${b}  ->  ${redactSecrets(b).text}`); fp++; }
+  }
+  if (!fp) ok(`no false positives on ${benign.length} benign strings`);
+
+  // Credential-shaped tags must be scrubbed before storage/sync, not just content.
+  const t = createSticky({ content: 'tagged note', category: 'context', tags: ['ghp_' + 'a'.repeat(30)], project_path: '/tagsec' });
+  if (t.tags.some((x) => x.includes('ghp_'))) bad('credential-shaped tag stored verbatim (syncs)');
+  else ok('credential-shaped tag redacted');
+}
+
 console.log(`\n${vuln === 0 ? 'ALL DEFENDED' : vuln + ' VULNERABILITY CLASS(ES) FOUND'}`);
+process.exit(vuln === 0 ? 0 : 1);

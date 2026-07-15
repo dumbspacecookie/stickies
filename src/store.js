@@ -104,8 +104,11 @@ export function createSticky({
     throw new Error("source must be 'auto' or 'manual'");
   }
 
-  // Scrub obvious secrets before they are persisted (and later synced).
-  const { text: safeContent, redacted } = redactSecrets(content.trim());
+  // Scrub obvious secrets before they are persisted (and later synced). Tags sync
+  // verbatim just like content, so a credential-shaped tag must be redacted too.
+  const { text: safeContent, redacted: contentRedacted } = redactSecrets(content.trim());
+  const safeTags = tags.map((t) => redactSecrets(t).text);
+  const redacted = contentRedacted || safeTags.some((t, i) => t !== tags[i]);
 
   const db = getDb();
   const now = nowIso();
@@ -117,7 +120,7 @@ export function createSticky({
     importance,
     project_path: np,
     project_key: deriveProjectKey(np),
-    tags: JSON.stringify(tags),
+    tags: JSON.stringify(safeTags),
     created_at: now,
     updated_at: now,
     expires_at: computeExpiry(category, now),
@@ -268,10 +271,15 @@ export function upsertFromSync(rec) {
     importance: rec.importance,
     project_path: normalizeProjectPath(rec.project_path),
     project_key: rec.project_key ?? deriveProjectKey(rec.project_path),
-    tags: JSON.stringify(Array.isArray(rec.tags) ? rec.tags.slice(0, MAX_TAGS) : []),
+    tags: JSON.stringify(
+      (Array.isArray(rec.tags) ? rec.tags.slice(0, MAX_TAGS) : []).map((t) => redactSecrets(String(t)).text)
+    ),
     created_at: rec.created_at || nowIso(),
     updated_at: rec.updated_at || nowIso(),
-    expires_at: rec.expires_at ?? null,
+    // Self-heal legacy rows: a category whose TTL is null (e.g. todo) is dismissal-only,
+    // so drop any stale expires_at that an older version wrote — otherwise the row keeps
+    // getting swept to 'stale' on every read. New expiries for TTL'd categories pass through.
+    expires_at: CATEGORY_TTL_DAYS[rec.category] == null ? null : (rec.expires_at ?? null),
     source: rec.source === 'manual' ? 'manual' : 'auto',
     status: ['active', 'stale', 'dismissed'].includes(rec.status) ? rec.status : 'active',
     dismiss_reason: rec.dismiss_reason ?? null,

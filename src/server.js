@@ -2,6 +2,10 @@
 // Stickies MCP server (phase 1): exposes stickies_write / stickies_read / stickies_dismiss
 // over stdio. All business logic lives in store.js; this file is just the MCP transport.
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -10,8 +14,13 @@ import { createSticky, readStickies, dismissSticky } from './store.js';
 import { notify } from './notify.js';
 import { CATEGORIES, IMPORTANCES } from './db.js';
 
+// Read the version from package.json so it can never drift from the published version.
+const { version: PKG_VERSION } = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8')
+);
+
 const server = new McpServer(
-  { name: 'stickies', version: '0.1.0' },
+  { name: 'stickies', version: PKG_VERSION },
   {
     instructions: [
       'Stickies is a persistent sticky-note layer that survives session resets.',

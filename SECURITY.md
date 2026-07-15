@@ -19,10 +19,10 @@ or publishing it.
 | Vector | Defense |
 |--------|---------|
 | **SQL injection** (content, tags, dismiss id) | All queries are parameterized; no user input is concatenated into SQL. |
-| **CLAUDE.md managed-section injection** | Note text can contain `<!-- stickies:end -->`; the digest escapes `<!--`/`-->` so content cannot forge the markers, break out of the managed section, or corrupt the file on repeated session starts. Content outside the markers is always preserved. |
+| **Context/CLAUDE.md injection** | The SessionStart digest is delivered via the hook's `additionalContext` channel — it is **not written to disk**. Note text is still escaped (`<!--`/`-->` neutralized) so a note can't forge the managed-section markers used by the one-time legacy-file cleanup, and any pre-existing user content in `<cwd>/CLAUDE.md` is always preserved. |
 | **Oversized input / DoS surface** | content ≤ 500 chars; tags ≤ 20, each ≤ 40 chars; read `limit` ≤ 500. |
-| **Secret capture at rest** | Content is scrubbed on write (`src/redact.js`): PEM private keys, AWS/GitHub/Slack/Google/OpenAI-Anthropic token shapes, JWTs, and `key=<value>` assignments are replaced with `[REDACTED]`; the write tool/CLI warn when this happens. |
-| **Arbitrary file write** | The SessionStart hook only writes `<cwd>/CLAUDE.md` (cwd from the trusted hook event). A sticky's `project_path` is a **filter only** — it is never used as a write target. |
+| **Secret capture at rest** | Content **and tags** are scrubbed on write (`src/redact.js`): PEM private keys; AWS/GitHub/Slack/Google/OpenAI/Anthropic/Stripe/npm/SendGrid/DigitalOcean token shapes and JWTs; `scheme://user:pass@host` connection strings; and labelled `KEY=<value>` / `"key":"<value>"` assignments (including `SCREAMING_SNAKE` env-var names) are replaced with `[REDACTED]`; the write tool/CLI warn when this happens. Best-effort, not a vault — an unlabelled high-entropy token with no known shape can still pass. |
+| **Arbitrary file write** | To deliver the digest the SessionStart hook writes **nothing to disk** — it returns `additionalContext`. The only disk write it can perform is a one-time removal of a legacy managed section from `<cwd>/CLAUDE.md` (it never creates the file). A sticky's `project_path` is a **filter only** — never a write target. |
 | **Native-dependency supply chain** | Zero native modules. Storage uses Node's built-in `node:sqlite`; runtime deps are only `@modelcontextprotocol/sdk`, `commander`, `zod`. |
 
 ## Phase 2 surfaces (auto-capture hook + dashboard)
