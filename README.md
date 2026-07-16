@@ -1,5 +1,10 @@
 # Stickies (Claude Code plugin)
 
+[![npm](https://img.shields.io/npm/v/stickies-mcp?logo=npm&color=cb3837)](https://www.npmjs.com/package/stickies-mcp)
+[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.dumbspacecookie%2Fstickies-6f42c1)](https://registry.modelcontextprotocol.io)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Node](https://img.shields.io/node/v/stickies-mcp)](https://nodejs.org)
+
 A small, deterministic sticky-note layer for Claude Code. You pin a note — a decision, a
 blocker, a todo — and it survives session resets, `/clear`, and closing the terminal. Next
 session in that project, the notes that still matter are handed back to Claude automatically.
