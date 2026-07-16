@@ -18,11 +18,16 @@ const MIN_INTERVAL_MS = 400;
 const MAX_EMBEDS_PER_POST = 10; // Discord hard limit
 
 const COLORS = { P1: 0xe5534b, P2: 0xd9a441, P3: 0x8b949e };
+const BAND = { P1: '🔴', P2: '🟡', P3: '⚪' };
 const EVENT_TITLE = {
-  created: '📌 Sticky added',
+  created: '🟨 Sticky added',
   dismissed: '✅ Sticky cleared',
-  digest: '🗒️ Stickies digest',
+  digest: '🟨 Stickies',
 };
+
+// Dashboard deep-link for a note. Clicking lands only on the machine running the
+// dashboard (localhost) — a desk convenience; the card content is what reads anywhere.
+const dashUrl = (id) => `http://127.0.0.1:${process.env.STICKIES_DASHBOARD_PORT || 4317}/#${id}`;
 
 let lastPostAt = 0;
 
@@ -59,18 +64,23 @@ function projectLabel(sticky) {
   return parts[parts.length - 1] || sticky.project_path;
 }
 
-// One sticky -> one Discord embed.
+// One sticky -> one rich Discord card: full content, priority colour, all metadata,
+// and a dashboard deep-link. This is the "see what the pin really is" popup.
 export function toEmbed(sticky, event = 'created') {
+  const tags = (sticky.tags || []).length ? sticky.tags.map((t) => `\`#${t}\``).join(' ') : '—';
+  const links = `[🔗 Open in dashboard →](${dashUrl(sticky.id)})  ·  \`dismiss ${sticky.id}\``;
   return {
-    title: EVENT_TITLE[event] ?? EVENT_TITLE.created,
-    description: shorten(sticky.content),
+    author: { name: EVENT_TITLE[event] ?? EVENT_TITLE.created },
+    title: `${BAND[sticky.importance] ?? ''} ${sticky.importance} · ${sticky.category}`.trim(),
+    description: `**${shorten(sticky.content, 3500)}**\n\n${links}`,
     color: COLORS[sticky.importance] ?? COLORS.P3,
     fields: [
       { name: 'priority', value: sticky.importance, inline: true },
       { name: 'type', value: sticky.category, inline: true },
       { name: 'project', value: projectLabel(sticky), inline: true },
+      { name: 'tags', value: tags, inline: false },
     ],
-    footer: { text: sticky.id },
+    footer: { text: `id ${sticky.id}` },
     timestamp: sticky.updated_at || sticky.created_at,
   };
 }
@@ -150,7 +160,7 @@ export async function notifySessionReport(
   const sections = [];
 
   if (created.length) {
-    sections.push(`**📌 Parked (${created.length})**`);
+    sections.push(`**🟨 Parked (${created.length})**`);
     sections.push(...created.slice(0, 12).map(line));
     if (created.length > 12) sections.push(`_…+${created.length - 12} more_`);
     sections.push('');
@@ -195,20 +205,21 @@ export async function notifyDigest(stickies, project, env = process.env) {
   for (const p of ['P1', 'P2', 'P3']) {
     const group = byP(p);
     if (!group.length) continue;
-    lines.push(`**${p}**`);
+    lines.push(`${BAND[p]} **${p}**`);
     for (const s of group.slice(0, 15)) {
-      lines.push(`• (${s.category}) ${shorten(s.content, 140)}`);
+      lines.push(`• \`${s.category}\` ${shorten(s.content, 160)}`);
     }
     if (group.length > 15) lines.push(`_…+${group.length - 15} more_`);
+    lines.push('');
   }
 
   return post(url, {
     embeds: [
       {
-        title: `🗒️ Open stickies — ${label}`,
-        description: shorten(lines.join('\n'), 3800),
+        title: `🟨 Full board — ${label}`,
+        description: shorten(lines.join('\n').trim(), 3800),
         color: byP('P1').length ? COLORS.P1 : COLORS.P2,
-        footer: { text: `${stickies.length} open` },
+        footer: { text: `${stickies.length} open · /stickies notify --all for global` },
       },
     ],
   });

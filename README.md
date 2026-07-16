@@ -142,6 +142,14 @@ node src/cli.js dashboard --detach      # run in background
 
 Loopback only; mutations are gated by an in-page token (CSRF-safe).
 
+## Statusline
+
+Stickies renders a compact segment in the Claude Code statusline — the 🟨 sticky icon, a count,
+and the top pending note. In modern terminals (Windows Terminal, iTerm2, WezTerm, Kitty, Ghostty)
+that segment is a **Ctrl+click hyperlink that opens the dashboard** to the full board (this project
++ global). Auto-skipped under tmux (which mangles OSC 8 links); disable with `--no-link`; port
+follows `STICKIES_DASHBOARD_PORT`. The dashboard must be running for the click to land.
+
 ## Sync (git-backed, opt-in)
 
 Stickies sync through a git repo **you own** — no third-party service, no new account.

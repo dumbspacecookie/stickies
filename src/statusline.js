@@ -43,7 +43,7 @@ function truncate(text, max) {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
-export function buildStatusline(stickies, { color = true, width = 60, icon = '📌' } = {}) {
+export function buildStatusline(stickies, { color = true, width = 60, icon = '🟨' } = {}) {
   if (!stickies.length) return EMPTY;
 
   const p1 = stickies.filter((s) => s.importance === 'P1');
@@ -115,13 +115,24 @@ async function main() {
     return;
   }
 
-  process.stdout.write(
-    buildStatusline(stickies, {
-      color: !flag('--no-color') && !process.env.NO_COLOR,
-      width: Number(opt('--width', 60)) || 60,
-      icon: flag('--no-icon') ? '*' : opt('--icon', '📌'),
-    })
-  );
+  const line = buildStatusline(stickies, {
+    color: !flag('--no-color') && !process.env.NO_COLOR,
+    width: Number(opt('--width', 60)) || 60,
+    icon: flag('--no-icon') ? '*' : opt('--icon', '🟨'),
+  });
+
+  // Make the whole segment a Ctrl+click hyperlink that opens the dashboard (the full,
+  // clickable board — this project + global). Verified working in Windows Terminal;
+  // also iTerm2/WezTerm/Kitty/Ghostty. Skipped under tmux (it mangles OSC 8) and with
+  // --no-link. Needs the dashboard running (`stickies dashboard`) for the click to land.
+  const linkable = line && !flag('--no-link') && !process.env.TMUX;
+  if (linkable) {
+    const port = process.env.STICKIES_DASHBOARD_PORT || 4317;
+    const url = `http://127.0.0.1:${port}/`;
+    process.stdout.write(`\x1b]8;;${url}\x1b\\${line}\x1b]8;;\x1b\\`);
+  } else {
+    process.stdout.write(line);
+  }
 }
 
 // Any failure prints nothing and exits clean — a broken statusline must never break the

@@ -181,7 +181,19 @@ function autocommit(n) {
   return p.ok ? `committed + pushed to ${branch}` : `committed; push skipped (${p.out.split('\n')[0]})`;
 }
 
-// ---- optional Discord mirror (inlined, opt-in) -----------------------------
+// ---- optional Discord mirror (inlined, opt-in): rich cards ------------------
+const DCOLORS = { P1: 0xe5534b, P2: 0xd9a441, P3: 0x8b949e };
+const DBAND = { P1: '🔴', P2: '🟡', P3: '⚪' };
+
+// Link to the committed board on GitHub — works from a phone (unlike a localhost
+// dashboard). Derived from origin; points at main's NOTES.md (the converged board).
+function boardUrl() {
+  const r = git(['remote', 'get-url', 'origin']);
+  if (!r.ok) return null;
+  const m = r.out.match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/i);
+  return m ? `https://github.com/${m[1]}/${m[2]}/blob/main/.stickies/NOTES.md` : null;
+}
+
 async function toDiscord(created) {
   const raw = process.env.STICKIES_DISCORD_WEBHOOK;
   if (!raw) return 'discord off';
@@ -192,10 +204,27 @@ async function toDiscord(created) {
     const ok = ['discord.com', 'discordapp.com', 'ptb.discord.com'].includes(host) && /^\/api\/webhooks\//.test(url.pathname);
     if (!ok) return 'discord: invalid webhook';
   } catch { return 'discord: invalid webhook'; }
-  const body = created.map((n) => `📌 **[${n.importance}/${n.category}]** ${n.content}`).join('\n').slice(0, 1900);
+
+  const board = boardUrl();
+  const embeds = created.slice(0, 10).map((n) => {
+    const tags = (n.tags || []).length ? n.tags.map((t) => `\`#${t}\``).join(' ') : '—';
+    const link = board ? `\n\n[🟨 View board on GitHub →](${board})` : '';
+    return {
+      author: { name: '🟨 Sticky added (repo-mode)' },
+      title: `${DBAND[n.importance] || ''} ${n.importance} · ${n.category}`.trim(),
+      description: `**${String(n.content).slice(0, 3500)}**${link}`,
+      color: DCOLORS[n.importance] || DCOLORS.P3,
+      fields: [
+        { name: 'priority', value: n.importance, inline: true },
+        { name: 'type', value: n.category, inline: true },
+        { name: 'tags', value: tags, inline: false },
+      ],
+      timestamp: n.created || new Date().toISOString(),
+    };
+  });
   try {
     const res = await fetch(url.toString(), {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content: body }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ embeds }),
     });
     return res.ok ? 'discord: posted' : `discord: HTTP ${res.status}`;
   } catch (e) { return `discord: ${e.message}`; }
@@ -214,7 +243,7 @@ function digest() {
       ).join('\n')
     : 'Stickies: no open notes for this repo.';
   process.stdout.write(JSON.stringify({
-    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: `📌 ${body}` },
+    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: `🟨 ${body}` },
   }));
 }
 
