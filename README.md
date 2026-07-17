@@ -159,9 +159,20 @@ this to your `settings.json`:
 
 By default it's compact — a count plus an urgency flag, e.g. `🟨 2!·19` (2 urgent of 19). It
 deliberately does **not** print note text (so nothing sensitive lands in your prompt); set
-`STICKIES_STATUSLINE_VERBOSE=1` if you want the top note's text too. In modern terminals (Windows
-Terminal, iTerm2, WezTerm, Kitty, Ghostty) the segment is a **Ctrl+click link to the dashboard**;
-it auto-skips under tmux, and the port follows `STICKIES_DASHBOARD_PORT`.
+`STICKIES_STATUSLINE_VERBOSE=1` if you want the top note's text too.
+
+**Clickable link.** In a terminal that supports OSC-8 hyperlinks (Windows Terminal, iTerm2,
+WezTerm, Kitty, Ghostty) the segment is a **Ctrl+click link that opens the dashboard**. Two
+things it needs:
+
+- The **dashboard must be running** — `stickies dashboard --detach` — or the click has nothing
+  to open.
+- On **Windows Terminal**, Claude Code doesn't auto-detect hyperlink support, so set
+  `FORCE_HYPERLINK=1` in your environment *before launching Claude Code* (e.g.
+  `setx FORCE_HYPERLINK 1`, then restart). Without it the segment renders but isn't clickable.
+
+The link auto-skips under tmux (which mangles OSC-8), disables with `--no-link`, and its port
+follows `STICKIES_DASHBOARD_PORT`.
 
 ---
 
