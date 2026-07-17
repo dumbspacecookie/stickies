@@ -5,64 +5,131 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node](https://img.shields.io/node/v/stickies-mcp)](https://nodejs.org)
 
-A small, deterministic sticky-note layer for Claude Code. You pin a note — a decision, a
-blocker, a todo — and it survives session resets, `/clear`, and closing the terminal. Next
-session in that project, the notes that still matter are handed back to Claude automatically.
+**Persistent sticky notes for Claude Code.** You pin a note — a decision, a blocker, a todo —
+and it survives session resets, `/clear`, and closing the terminal. Next time you open Claude
+in that project, the notes that still matter are handed back to it automatically.
 
 **Stickies is not a memory system, and it doesn't try to be one.** It won't watch your session
 and decide what to remember. It's the opposite: a handful of notes *you* (or Claude, on request)
 write down on purpose, that expire on their own, and that you can read, prune, and trust. No
-vectors, no LLM summarization pass, no cloud. If you want an AI that auto-remembers everything,
-use [Claude Code's built-in memory](https://code.claude.com/docs/en/memory) — it's on by default.
+vectors, no LLM summarization, no cloud. If you want an AI that auto-remembers everything, use
+[Claude Code's built-in memory](https://code.claude.com/docs/en/memory) — it's on by default.
 Stickies is for when you want the twenty notes that actually matter, and you want them to expire.
 
-**Two things here you won't find elsewhere:**
+---
+
+## Quick start (60 seconds)
+
+You need **Node ≥ 22.5** (`node -v` to check — it's for the built-in SQLite).
+
+```sh
+claude plugin marketplace add dumbspacecookie/stickies
+claude plugin install stickies@stickies --scope user
+```
+
+Restart Claude Code. That's it — install once, it works in every project. Now try it:
+
+- **Ask Claude to remember something:** *"pin a P1 todo: fix the auth leak before release."*
+  Claude writes it down; it'll be waiting for you next session.
+- **See your notes:** type `/stickies` in Claude Code. Prefer a shell? `npm i -g stickies-mcp`
+  gives you a `stickies` command — then `stickies list`.
+- **Open the board in a browser:** `/stickies dashboard` → `http://127.0.0.1:4317/`.
+
+Nothing leaves your machine. Everything is a local SQLite file on your disk until *you* turn on
+optional git sync.
+
+---
+
+## Where it works
+
+Notes belong to the **project**, not the app you're in — one local database, scoped by project.
+What changes between surfaces is how much happens automatically.
+
+| Surface | What you get | How |
+|---|---|---|
+| **Terminal** (Claude Code CLI) | ✅ the full loop — auto-capture, session-start digest, `/stickies`, statusline, dashboard | install the plugin |
+| **Claude Desktop** (chat app) | ✅ read / write via MCP tools (no hooks; pass the project path) | add the MCP server to `claude_desktop_config.json` |
+| **iPhone / web** (Remote Control) | ✅ full loop — the phone drives a session running on your machine | run `claude remote-control` on your machine |
+| **iPhone / web** (cloud sandbox) | ✅ full loop via **repo-mode** — notes committed into the repo | `stickies init-repo` (see [Repo-mode](#repo-mode-cloud--mobile)) |
+| **Any MCP client** | ✅ read / write | it's on the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.dumbspacecookie/stickies` |
+| **Anywhere, read-only** | ✅ a glance at your board | Discord digest / board card |
+
+---
+
+## Two things here you won't find elsewhere
 
 - **Zero-turn capture.** Claude parks a note by writing one line *in a reply it was already
-  writing* — `!!sticky todo P1 :: fix the auth leak` — and a Stop hook persists it. No extra
-  tool call, no extra turn, no tokens spent on a round-trip. (Details: [auto-capture](#auto-capture-directive).)
+  writing* — `!!sticky todo P1 :: fix the auth leak` — and a Stop hook persists it. No extra tool
+  call, no extra turn, no tokens spent on a round-trip. (See [Auto-capture](#auto-capture).)
 - **Importance-graded injection.** The session-start digest degrades *by importance*, not by
   position: P1 in full, P2 truncated, P3 a bare count. It never just chops the list at N lines.
 
-**New here? Read [USAGE.md](USAGE.md)** — plain-terms guide (the three verbs, what P1/P2/P3
-control, project vs global). For the phone/desktop story, see [PHONE.md](PHONE.md). This README
-is the reference: components, internals, install.
+---
 
-**Everything runs locally.** SQLite on your disk, a deterministic auto-capture hook, a loopback
-web dashboard. Optional git-backed sync through a repo you own — off unless you configure it, and
-the only thing that ever touches the network.
+## Flow Board
 
-**Clients — what's shipped vs planned** (full detail in [PHONE.md](PHONE.md)):
+If your project plans work in a `.planning/ROADMAP.md` (the GSD planning convention), Stickies also
+gives you a **live Kanban board** derived straight from that roadmap —
+To-Do / Doing / Done — with your stickies cross-linked onto the phases they're about. It's a
+projection of your plan, derived on the fly, so it can never drift out of sync with it.
 
-| Surface | State | How |
+**Four places to see the same board, pick whichever fits where you are:**
+
+| Where | Command | Good for |
 |---|---|---|
-| Terminal (Claude Code) | ✅ full loop | plugin: hooks + commands + MCP |
-| Claude Desktop (Windows/Mac) | ✅ read/write | MCP tools only — no hooks, pass the project path |
-| iPhone / web | ✅ full loop **via Remote Control** | run `claude remote-control` on your machine; the phone drives that local session (nothing to build) |
-| iPhone / web (cloud sandbox) | ✅ full loop **via repo-mode** | `stickies init-repo` commits a store + hooks into the repo; notes persist and converge to `main` (see [repo-mode](#repo-mode-cloud--mobile)) |
-| Anywhere, read-only | ✅ | Discord session report |
+| **On GitHub / your phone** | `stickies board` → commit `BOARD.md` | glancing at progress from a phone browser — `BOARD.md` renders natively on github.com, no server, no app |
+| **In a browser** (local) | `stickies dashboard` → open `/board` | an interactive Kanban; `/graph` shows the plan's dependency DAG |
+| **In Discord** | `stickies board --discord` | a push-glanceable card — progress, column counts, per-phase status |
+| **In your statusline** | (see [Statusline](#statusline)) | a tiny always-on `📋 ▶2 ☐1 ✓2` (doing / to-do / done) |
 
-## Components
+```sh
+stickies board                     # write BOARD.md in the project root (commit it → view on GitHub)
+stickies board --out docs/BOARD.md # write it somewhere else
+stickies board --discord           # post the board to your Discord webhook instead
+```
 
-| Component | File | Purpose |
-|-----------|------|---------|
-| MCP server | `src/server.js` (via `.mcp.json`) | tools `stickies_write`, `stickies_read`, `stickies_dismiss` |
-| SessionStart hook | `src/session-start.js` (via `hooks/hooks.json`) | injects a digest into the live session via the hook's `additionalContext` (no file is touched) |
-| Stop hook (auto-capture) | `src/auto-capture.js`, `src/directives.js` | persists `!!sticky …` directives from each turn, deduped |
-| Local dashboard | `src/dashboard.js`, `src/dashboard-page.js` | loopback web UI to view/add/dismiss stickies |
-| Slash command | `commands/stickies.md` | `/stickies`, `/stickies all`, `/stickies add <text>`, `/stickies dismiss <id>`, `/stickies dashboard` |
-| CLI | `src/cli.js` | backs the slash command; also usable directly |
-| Store / DB | `src/store.js`, `src/db.js` | sticky CRUD + schema + TTL logic + auto-capture dedup |
-| Sync engine | `src/sync.js` | export/import a sync document, last-writer-wins merge |
-| Git sync | `src/git-sync.js` | pull → merge → export → commit → push against a repo you own |
-| Project identity | `src/project-key.js`, `src/store-path.js` | machine-independent project key (git remote, else path) |
-| Digest | `src/digest.js` | digest formatting; one-time cleanup of the deprecated CLAUDE.md managed section |
-| Redaction | `src/redact.js` | scrubs secrets from content on write |
-| Repo-mode | `src/repo-mode/` (`engine.mjs`, `install.js`, `stickies-sync.yml`) | cloud/mobile-native: committed store + hooks + reconcile Action; installed by `stickies init-repo` |
+Each phase shows its progress (`3/4`), its wave, whether it shipped (`✓ shipped 4/4`) and whether
+it's blocked (`⛔`). In a cloud/mobile session with no `.planning/`, a committed `.flow/` snapshot
+keeps the board self-sufficient — same repo-mode idea as the notes.
 
-## Auto-capture directive
+---
 
-In a reply, the model can capture a durable fact with one line — a Stop hook persists it:
+## Everyday commands
+
+**In Claude Code** (the `/stickies` slash command):
+
+| Command | Does |
+|---|---|
+| `/stickies` | list this project's active notes (+ globals) |
+| `/stickies all` | list every project's notes |
+| `/stickies add <text>` | add a note by hand |
+| `/stickies dismiss <id>` | clear a note (a todo is "done" when dismissed) |
+| `/stickies dashboard` | open the local web board |
+| `/stickies sync` | sync through your git repo (if configured) |
+
+**In any shell** (the CLI — same engine). Install it with `npm i -g stickies-mcp` to get the
+`stickies` command on your PATH, then:
+
+```sh
+stickies list                          # active notes for this dir + globals
+stickies list --all                    # every project + globals
+stickies add "ship the release" -c todo -i P1     # add a P1 todo to this project
+stickies add "call the bank" -c todo -p global    # a global todo — shows up everywhere
+stickies dismiss <id> -r "done"        # clear it
+stickies dashboard --open              # local web board, open the browser
+stickies board                         # write a GitHub-viewable BOARD.md
+stickies status                        # the one-line statusline summary
+stickies sync                          # pull → merge → push through your git repo
+stickies notify                        # push the open list to Discord
+stickies init-repo                     # make notes work in cloud/mobile (repo-mode)
+```
+
+---
+
+## Auto-capture
+
+The lowest-friction way in: Claude captures a durable fact by writing one line in its reply, and
+a Stop hook persists it — no tool call, no extra turn.
 
 ```
 !!sticky <category> [P1|P2|P3] [global] [#tag ...] :: <content>
@@ -70,30 +137,128 @@ In a reply, the model can capture a durable fact with one line — a Stop hook p
 !!sticky todo P1 global :: cut the npm release
 ```
 
-category required; importance defaults to P2; deduped. `global` and tags are optional and
-may appear in any order. Without `global` a note is scoped to the current project; with it
-the note is unscoped and surfaces in every project.
+`category` is required; importance defaults to **P2**; notes are deduped. `global` and `#tags`
+are optional and may appear in any order. Without `global`, a note is scoped to the current
+project; with it, the note surfaces in **every** project.
 
-The Stop hook scans the assistant text of the whole completed turn — the turn boundary is
-the **human's** message, not merely the last transcript entry of type `user` (Claude Code
-logs tool results as `user` entries too). So a directive written mid-turn survives any tool
-calls that follow it. Directives inside subagent (`isSidechain`) replies are ignored.
+The hook scans the whole completed turn, so a directive written *before* Claude runs more tools
+still gets saved. Directives inside subagent replies are ignored. Secrets are scrubbed on write.
 
-## Clients
+---
 
-Notes belong to the *project*, not the client: one DB, scoped by project key. What differs
-is how much is automatic.
+## Statusline
 
-| | Claude Code (terminal + desktop app) | Claude Desktop (chat app) |
-|---|---|---|
-| Digest injected at session start | ✅ SessionStart hook | ❌ no hook support |
-| `!!sticky` auto-capture | ✅ Stop hook | ❌ no hook support |
-| `/stickies` command | ✅ | ❌ |
-| `stickies_write/read/dismiss` | ✅ | ✅ (MCP) |
-| Knows the current project | ✅ from cwd | ❌ pass `project_path` explicitly |
+Point your Claude Code statusline at Stickies to get an always-on summary. It's **opt-in** — add
+this to your `settings.json`:
 
-Claude Code needs no setup beyond installing the plugin. Claude Desktop supports only the
-MCP tools — add to `claude_desktop_config.json` (`%APPDATA%\Claude\` on Windows,
+```json
+{ "statusLine": { "type": "command", "command": "stickies status" } }
+```
+
+(that uses the `stickies` command from `npm i -g stickies-mcp`)
+
+By default it's compact — a count plus an urgency flag, e.g. `🟨 2!·19` (2 urgent of 19). It
+deliberately does **not** print note text (so nothing sensitive lands in your prompt); set
+`STICKIES_STATUSLINE_VERBOSE=1` if you want the top note's text too. In modern terminals (Windows
+Terminal, iTerm2, WezTerm, Kitty, Ghostty) the segment is a **Ctrl+click link to the dashboard**;
+it auto-skips under tmux, and the port follows `STICKIES_DASHBOARD_PORT`.
+
+---
+
+## Dashboard
+
+```sh
+stickies dashboard                 # http://127.0.0.1:4317/
+stickies dashboard --open          # and open the browser
+stickies dashboard --detach        # run in the background
+```
+
+Loopback only (never leaves `127.0.0.1`); mutations are gated by an in-page token, so a random
+web page can't poke it. Routes: `/` the notes board, `/board` the Flow Board Kanban, `/graph` the
+plan dependency DAG.
+
+---
+
+## Provenance
+
+Every note records **where it was written** — 💻 terminal, 🖥️ desktop, or 📱 mobile — so on the
+dashboard you can tell the note you jotted from your phone from the one Claude captured at your
+desk. It's a best-effort stamp each entry point knows about itself; no configuration needed.
+
+---
+
+## Sync (git-backed, opt-in)
+
+Sync through a git repo **you own** — no third-party service, no new account. This is the only
+feature that ever touches the network, and only once you point it at a remote.
+
+```sh
+export STICKIES_SYNC_REPO=/path/to/your/stickies-data   # a git clone you control
+stickies sync           # pull → merge (last-writer-wins) → export → commit → push
+
+# or offline, through any file channel:
+stickies export -f notes.json
+stickies import -f notes.json
+```
+
+Each note carries a machine-independent key derived from the project's **git remote** (SSH and
+HTTPS collapse to the same key), so a project's notes follow you between machines even when the
+checkout lives at a different path on each. Merge is whole-record last-writer-wins by `updated_at`
+— conflict-free and order-independent.
+
+**Auto-sync** (also opt-in): set `STICKIES_AUTO_SYNC=1` alongside `STICKIES_SYNC_REPO` and Stickies
+pulls on session start and pushes when a turn captures a note. Unset, nothing syncs on its own.
+
+---
+
+## Repo-mode (cloud / mobile)
+
+The plugin lives in `~/.claude`, so it doesn't exist in a cloud session (the iPhone app /
+claude.ai/code run in an ephemeral VM that only sees the repo they cloned). **Repo-mode** makes
+Stickies work there — no plugin, nothing to install:
+
+```sh
+stickies init-repo         # run inside the repo you want notes in
+```
+
+That commits a self-contained, zero-dependency engine and wires it up:
+
+- `.stickies/notes.json` — the store, plus a human-readable `.stickies/NOTES.md` mirror
+- `.claude/settings.json` — a SessionStart hook (the digest) and a Stop hook (`!!sticky` capture)
+- `CLAUDE.md` — teaches Claude the `!!sticky` convention
+- `.github/workflows/stickies-sync.yml` — converges notes from every session branch into `main`
+
+Cloud sessions write to their own branch; the bundled Action merges each note into `main`
+(union + dismiss-wins + dedupe) — one converged board per repo, hands-off. Same `!!sticky` grammar
+and same redaction as the local plugin.
+
+---
+
+## The sticky model
+
+Fields: `id`, `content` (≤ 500 chars), `category`, `importance` (P1/P2/P3),
+`project_path` (absolute, or null for global), `tags[]`, `origin`, timestamps, `expires_at`,
+`source` (auto/manual), `status` (active/stale/dismissed).
+
+**Default TTLs:** decision 30d · blocker 7d · preference 90d · context 14d · **todo never expires**
+(a task is done when you dismiss it, not when a timer runs out). That last one is what makes
+`todo` + `global` a real cross-project task list — an unfinished task can't silently vanish.
+
+**Storage:** one SQLite file for all projects, scoped per-project — `$STICKIES_DB` if set, else
+`~/.stickies/stickies.db`. It uses Node's **built-in** SQLite (`node:sqlite`, hence Node ≥ 22.5),
+so the plugin has zero compiled dependencies and survives Claude Code's plugin-cache copy on any
+machine.
+
+**Session-start digest:** P1 in full, P2 to ~100 chars, P3 a count. It's handed to Claude through
+the SessionStart hook's `additionalContext` — it reaches the model **without writing to any file**.
+
+---
+
+## Claude Desktop (MCP only)
+
+Claude Desktop supports the MCP tools (`stickies_write` / `stickies_read` / `stickies_dismiss`) but
+not hooks or the slash command, so there's no auto-capture or digest there — add it and pass the
+project path explicitly. In `claude_desktop_config.json` (`%APPDATA%\Claude\` on Windows,
 `~/Library/Application Support/Claude/` on macOS):
 
 ```json
@@ -107,172 +272,65 @@ MCP tools — add to `claude_desktop_config.json` (`%APPDATA%\Claude\` on Window
 }
 ```
 
-Both clients read the same `~/.stickies/stickies.db`, so notes written in one are visible
-in the other with no sync step.
+Both clients read the same `~/.stickies/stickies.db`, so a note written in one shows up in the
+other with no sync step.
 
-## Repo-mode (cloud / mobile)
+---
 
-The plugin above is **user-scoped** — it lives in `~/.claude`, so it does not exist in a cloud
-session (the iPhone app / claude.ai/code run in an ephemeral VM that only sees files committed in
-the repo it cloned). **Repo-mode** makes Stickies work there, with no plugin and nothing to install:
+## Components (reference)
 
-```sh
-stickies init-repo                 # in the repo you want notes in
-# or: node src/cli.js init-repo /path/to/repo
-```
+| Component | File | Purpose |
+|---|---|---|
+| MCP server | `src/server.js` | tools `stickies_write` / `stickies_read` / `stickies_dismiss` |
+| SessionStart hook | `src/session-start.js` | injects the digest via `additionalContext` (touches no file) |
+| Stop hook (auto-capture) | `src/auto-capture.js`, `src/directives.js` | persists `!!sticky …` directives, deduped |
+| Local dashboard | `src/dashboard.js`, `src/dashboard-page.js` | loopback web UI: notes, `/board`, `/graph` |
+| Flow Board | `src/flow/` | derive the Kanban from `.planning/ROADMAP.md`; `BOARD.md` export; `.flow/` snapshot |
+| Slash command | `commands/stickies.md` | `/stickies …` |
+| CLI | `src/cli.js` | backs the slash command; usable directly |
+| Store / DB | `src/store.js`, `src/db.js` | CRUD + schema + TTL + dedup + provenance |
+| Sync | `src/sync.js`, `src/git-sync.js` | export/import + git pull→merge→push |
+| Redaction | `src/redact.js` | scrubs secrets from content on write |
+| Repo-mode | `src/repo-mode/` | committed store + hooks + reconcile Action for cloud/mobile |
 
-That commits a self-contained, zero-dependency engine and wires it up:
+---
 
-- `.stickies/notes.json` — the store (source of truth) + a human-readable `.stickies/NOTES.md` mirror
-- `.claude/settings.json` — a SessionStart hook (injects the digest) and a Stop hook (captures `!!sticky …`)
-- `CLAUDE.md` — teaches Claude the `!!sticky` convention (the plugin's MCP instructions aren't present in the cloud)
-- `.github/workflows/stickies-sync.yml` — converges notes from every session branch into `main`
-
-In a cloud session Claude reads the repo's notes at start and captures new ones into
-`.stickies/notes.json`; because that's committed, the note survives the disposable VM. Cloud
-sessions write to their own `claude/*` branch, so the bundled GitHub Action merges each note into
-`main` (union + dismiss-wins + dedupe) — one converged board per repo, hands-off. Secrets are
-redacted before the store and before Discord, exactly as in the local plugin.
-
-Repo-mode is **per-repo** (notes live in that repo). The user-scope plugin remains the way to get
-the cross-project shared board on your desktop. Both use the same `!!sticky` grammar and redaction.
-
-## Dashboard
+## Install & develop
 
 ```sh
-npm run dashboard                       # http://127.0.0.1:4317/
-node src/cli.js dashboard --open        # and open the browser
-node src/cli.js dashboard --detach      # run in background
-```
-
-Loopback only; mutations are gated by an in-page token (CSRF-safe).
-
-## Statusline
-
-Stickies renders a compact segment in the Claude Code statusline — the 🟨 sticky icon, a count,
-and the top pending note. In modern terminals (Windows Terminal, iTerm2, WezTerm, Kitty, Ghostty)
-that segment is a **Ctrl+click hyperlink that opens the dashboard** to the full board (this project
-+ global). Auto-skipped under tmux (which mangles OSC 8 links); disable with `--no-link`; port
-follows `STICKIES_DASHBOARD_PORT`. The dashboard must be running for the click to land.
-
-## Sync (git-backed, opt-in)
-
-Stickies sync through a git repo **you own** — no third-party service, no new account.
-
-Each note records a machine-independent `project_key` derived from the project's **git
-remote** (SSH and HTTPS collapse to the same key). So a project's notes follow you between
-machines even though the checkout lives at a different path on each — not just globals.
-Projects without a git remote fall back to a path-based key (same-machine scope).
-
-```sh
-export STICKIES_SYNC_REPO=/path/to/your/stickies-data   # a git clone you control
-node src/cli.js sync          # pull -> merge (last-writer-wins) -> export -> commit -> push
-# or offline, through any file channel:
-node src/cli.js export -f notes.json
-node src/cli.js import -f notes.json
-```
-
-Merge is whole-record last-writer-wins by `updated_at` — conflict-free and order-independent.
-Pull/push are skipped if the repo has no remote, so a purely local repo works too. Sync is
-the only feature that can reach the network, and only when you configure a remote.
-
-### Auto-sync (opt-in)
-
-```sh
-export STICKIES_SYNC_REPO=/path/to/your/stickies-data
-export STICKIES_AUTO_SYNC=1
-```
-
-With both set, Stickies pulls on session start (so your digest reflects other machines)
-and pushes when a turn captures a new sticky. Off by default — with `STICKIES_AUTO_SYNC`
-unset, nothing syncs automatically and you sync manually with `/stickies sync`.
-
-## Sticky model
-
-Fields: `id`, `content` (≤500 chars), `category`, `importance` (P1/P2/P3),
-`project_path` (absolute, or null for global), `tags[]`, `created_at`, `updated_at`,
-`expires_at`, `source` (auto/manual), `status` (active/stale/dismissed).
-
-Default TTLs: decision 30d · blocker 7d · preference 90d · context 14d · **todo never
-expires** (a task is done when you dismiss it, not when a timer runs out).
-
-### Task lists
-
-`todo` + `global` makes stickies usable as a task list: per-project todos live in the
-project's drawer, cross-project ones (`global`) surface everywhere. Neither expires, so an
-unfinished task can't silently vanish. Finish one by dismissing it:
-
-```sh
-node src/cli.js list                        # this build's todos + globals
-node src/cli.js add "ship it" -c todo -i P1 # project todo
-node src/cli.js add "ship it" -c todo -p global
-node src/cli.js dismiss <id> -r "done"      # a todo is done when dismissed
-```
-
-## Storage
-
-One SQLite file shared across all projects, scoped per-project by `project_path`.
-Location: `$STICKIES_DB` if set, else `~/.stickies/stickies.db`.
-
-Uses Node's **built-in** SQLite (`node:sqlite`, requires Node ≥ 22.5) rather than a
-native addon, so the plugin has zero compiled dependencies and survives Claude Code's
-plugin-cache copy on any machine. (`node` is invoked with
-`--disable-warning=ExperimentalWarning` to mute the node:sqlite experimental notice.)
-
-## Digest format (session start)
-
-P1 shown in full · P2 summarised to first 100 chars · P3 count only. The digest is handed to
-the session through the SessionStart hook's `additionalContext` — it reaches Claude **without
-writing to any file**. (Earlier versions wrote the digest into the project's `CLAUDE.md`
-between `<!-- stickies:start -->` / `<!-- stickies:end -->` markers; that mutated a git-tracked,
-often team-shared file, so a note could land in a diff. The SessionStart hook now removes that
-managed section on next run — a one-time cleanup.)
-
-## Install
-
-Requires **Node ≥ 22.5** (for the built-in `node:sqlite`). Check with `node -v`.
-
-```sh
+# use it:
 claude plugin marketplace add dumbspacecookie/stickies
-claude plugin install stickies@stickies --scope user
-```
+claude plugin install stickies@stickies --scope user     # restart Claude Code after
 
-Then restart Claude Code — hooks and the MCP server are read at startup. Install once at user
-scope and it's available in every project; per-project scoping is by `project_path` on each
-note, not by per-project install.
-
-**Local dev** (working on Stickies itself):
-
-```sh
+# work on it:
 git clone https://github.com/dumbspacecookie/stickies
-claude plugin marketplace add ./stickies
-claude plugin install stickies@stickies --scope user
-npm test        # 13 suites, no network
+cd stickies
+npm test        # 23 suites, no network
 ```
+
+Install once at user scope and it's in every project; per-project scoping is by `project_path` on
+each note, not a per-project install.
+
+---
 
 ## How Stickies compares
 
-Persistent-notes-for-Claude-Code is a crowded space. Being honest about it:
+Persistent-notes-for-Claude-Code is a crowded space. Honestly:
 
-- **[Claude Code's built-in memory](https://code.claude.com/docs/en/memory)** — on by default,
-  the model decides what to save, no expiry, no importance tiers, no cross-project globals,
-  per-repo only. Stickies is the deterministic, human-authored, *expiring* alternative for people
-  who turned that off.
+- **[Claude Code's built-in memory](https://code.claude.com/docs/en/memory)** — on by default, the
+  model decides what to save, no expiry, no importance tiers, no cross-project globals, per-repo
+  only. Stickies is the deterministic, human-authored, *expiring* alternative for people who turned
+  that off.
 - **Knowledge-graph / vector memory servers** (mem0, OpenMemory, `server-memory`, basic-memory) —
   fuzzy retrieval over everything you've said. Different job. Stickies stores a small typed set,
   not an embedding index.
-- **Hook-based memory plugins** — several exist and some are excellent. Stickies' narrow bets are
-  the three above: zero-turn `!!sticky` capture, importance-graded injection, and a global tier
-  that surfaces across projects alongside per-repo scoping.
+- **Hook-based memory plugins** — several exist, some excellent. Stickies' narrow bets are the ones
+  above: zero-turn `!!sticky` capture, importance-graded injection, a global tier that surfaces
+  across projects, and a Flow Board derived from your plan.
 
 If you want auto-recall of your whole history, use one of those. Stickies is for a short,
-trustworthy, self-pruning list.
+trustworthy, self-pruning list — and a board you can glance at from your phone.
 
-## CLI usage
+---
 
-```sh
-node src/cli.js list                 # active stickies for cwd + globals
-node src/cli.js list --all           # every project + globals
-node src/cli.js add "text" -c todo -i P1
-node src/cli.js dismiss <id> -r "done"
-```
+MIT · built by [dumbspacecookie](https://github.com/dumbspacecookie)
