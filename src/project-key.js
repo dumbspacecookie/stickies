@@ -56,6 +56,7 @@ function gitRemote(projectPath) {
     const r = spawnSync('git', ['-C', projectPath, 'config', '--get', 'remote.origin.url'], {
       encoding: 'utf8',
       timeout: 3000,
+      windowsHide: true, // no console flash on Windows
     });
     if (r.status === 0) return r.stdout.trim();
   } catch {

@@ -6,6 +6,7 @@
 // createElement + textContent only, preserving that safety end to end.
 
 import { relativeTime } from './relative-time.mjs';
+import { themeStyle, themeBoot, themeToggleButton } from './theme.mjs';
 
 export function renderBoardPage({ project }) {
   const proj = String(project || '(global)');
@@ -135,6 +136,8 @@ export function renderBoardPage({ project }) {
   .doc-body th, .doc-body td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; }
   .doc-body hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
 </style>
+${themeStyle()}
+${themeBoot()}
 </head>
 <body>
 <header>
@@ -151,6 +154,8 @@ export function renderBoardPage({ project }) {
     <button id="tColumns" type="button" class="active">Columns</button>
     <button id="tSwimlanes" type="button">Swimlanes</button>
   </div>
+  ${themeToggleButton()}
+  <a class="nav" href="/command">🛰 Command</a>
   <a class="nav" href="/graph">🕸 Graph →</a>
   <a class="nav" href="/">🟡 Stickies →</a>
 </header>

@@ -14,10 +14,25 @@ import { redactSecrets } from './redact.js';
 import { normalizeProjectPath } from './store-path.js';
 import { deriveProjectKey } from './project-key.js';
 import { normalizeOrigin } from './origin.js';
+import { resolveDueDate } from './due.js';
 
 export { normalizeProjectPath };
 
 const IMPORTANCE_RANK = { P1: 1, P2: 2, P3: 3 };
+
+// Accept either an already-resolved ISO instant or a raw due token ("1h", "2026-07-20").
+// A token is resolved against now; an unparseable value degrades to null (no due date)
+// rather than throwing — a bad deadline must never block capturing the note itself.
+function normalizeDueAt(v) {
+  if (v == null || v === '') return null;
+  const s = String(v).trim();
+  // Already an ISO instant? Keep it verbatim (this is the sync/import path).
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(s)) {
+    const t = new Date(s).getTime();
+    return Number.isFinite(t) ? s : null;
+  }
+  return resolveDueDate(s);
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -58,6 +73,7 @@ function rowToSticky(row) {
     source: row.source,
     origin: row.origin ?? 'unknown',
     session_id: row.session_id ?? null,
+    due_at: row.due_at ?? null,
     status: row.status,
     dismiss_reason: row.dismiss_reason ?? null,
   };
@@ -83,6 +99,7 @@ export function createSticky({
   source = 'auto',
   origin = 'unknown',
   session_id = null,
+  due_at = null,
 }) {
   if (typeof content !== 'string' || content.trim() === '') {
     throw new Error('content is required and must be a non-empty string');
@@ -132,6 +149,7 @@ export function createSticky({
     source,
     origin: normalizeOrigin(origin),
     session_id: session_id ? String(session_id) : null,
+    due_at: normalizeDueAt(due_at),
     status: 'active',
     dismiss_reason: null,
   };
@@ -139,10 +157,10 @@ export function createSticky({
   db.prepare(
     `INSERT INTO stickies
        (id, content, category, importance, project_path, project_key, tags,
-        created_at, updated_at, expires_at, source, origin, session_id, status, dismiss_reason)
+        created_at, updated_at, expires_at, source, origin, session_id, due_at, status, dismiss_reason)
      VALUES
        (@id, @content, @category, @importance, @project_path, @project_key, @tags,
-        @created_at, @updated_at, @expires_at, @source, @origin, @session_id, @status, @dismiss_reason)`
+        @created_at, @updated_at, @expires_at, @source, @origin, @session_id, @due_at, @status, @dismiss_reason)`
   ).run(sticky);
 
   // `redacted` is informational only (not persisted) so callers can warn the user.
@@ -195,6 +213,33 @@ export function readStickies({
     .slice(0, limit);
 }
 
+// Every project (distinct non-null project_path) with active stickies, plus a per-importance
+// count and a blocker tally — the raw material for the cross-project command center. Globals
+// (project_path IS NULL) belong to no single project and are excluded here.
+export function projectSummaries() {
+  const db = getDb();
+  sweepExpired(db);
+  const rows = db
+    .prepare(
+      `SELECT project_path AS path,
+              COUNT(*) AS total,
+              SUM(CASE WHEN importance = 'P1' THEN 1 ELSE 0 END) AS p1,
+              SUM(CASE WHEN importance = 'P2' THEN 1 ELSE 0 END) AS p2,
+              SUM(CASE WHEN importance = 'P3' THEN 1 ELSE 0 END) AS p3,
+              SUM(CASE WHEN category = 'blocker' THEN 1 ELSE 0 END) AS blockers,
+              MAX(created_at) AS lastTouched
+         FROM stickies
+        WHERE status = 'active' AND project_path IS NOT NULL
+        GROUP BY project_path`
+    )
+    .all();
+  return rows.map((r) => ({
+    project_path: r.path,
+    stickies: { total: r.total, p1: r.p1, p2: r.p2, p3: r.p3, blockers: r.blockers },
+    lastTouched: r.lastTouched || null,
+  }));
+}
+
 // Persist a batch of parsed directives, skipping ones that duplicate an existing
 // active sticky (same stored content + same project scope). Used by the post-turn
 // auto-write hook, which may run many times over a session.
@@ -240,6 +285,7 @@ export function autoCapture(items, project_path, { origin = 'unknown', session_i
           source: 'auto',
           origin,
           session_id,
+          due_at: it.due, // raw token; createSticky resolves it against now
         })
       );
     } catch {
@@ -292,6 +338,7 @@ export function upsertFromSync(rec) {
     source: rec.source === 'manual' ? 'manual' : 'auto',
     origin: normalizeOrigin(rec.origin),
     session_id: rec.session_id ? String(rec.session_id) : null,
+    due_at: normalizeDueAt(rec.due_at),
     status: ['active', 'stale', 'dismissed'].includes(rec.status) ? rec.status : 'active',
     dismiss_reason: rec.dismiss_reason ?? null,
   };
@@ -301,10 +348,10 @@ export function upsertFromSync(rec) {
     db.prepare(
       `INSERT INTO stickies
          (id, content, category, importance, project_path, project_key, tags,
-          created_at, updated_at, expires_at, source, origin, session_id, status, dismiss_reason)
+          created_at, updated_at, expires_at, source, origin, session_id, due_at, status, dismiss_reason)
        VALUES
          (@id, @content, @category, @importance, @project_path, @project_key, @tags,
-          @created_at, @updated_at, @expires_at, @source, @origin, @session_id, @status, @dismiss_reason)`
+          @created_at, @updated_at, @expires_at, @source, @origin, @session_id, @due_at, @status, @dismiss_reason)`
     ).run(row);
     return 'added';
   }
@@ -316,7 +363,7 @@ export function upsertFromSync(rec) {
          content=@content, category=@category, importance=@importance, project_path=@project_path,
          project_key=@project_key, tags=@tags, created_at=@created_at, updated_at=@updated_at,
          expires_at=@expires_at, source=@source, origin=@origin, session_id=@session_id,
-         status=@status, dismiss_reason=@dismiss_reason
+         due_at=@due_at, status=@status, dismiss_reason=@dismiss_reason
        WHERE id=@id`
     ).run(row);
     return 'updated';

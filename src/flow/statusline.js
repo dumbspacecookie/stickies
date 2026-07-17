@@ -8,11 +8,10 @@
 // has something to say. Made Ctrl+clickable (OSC 8) to open the board in the dashboard.
 
 import { buildBoard } from './board.mjs';
+import { resolveStatuslineTheme, statuslinePalette } from '../statusline.js';
 
 const ESC = '\x1b[';
-const DIM = `${ESC}2m`;
 const BOLD = `${ESC}1m`;
-const AMBER = `${ESC}33m`;
 const RESET = `${ESC}0m`;
 const EMPTY = '';
 
@@ -28,17 +27,19 @@ function readStdin() {
   });
 }
 
-export function buildFlowStatusline(board, { color = true } = {}) {
+export function buildFlowStatusline(board, { color = true, theme = 'dark' } = {}) {
   if (!board || !board.ok) return EMPTY;
   const { todo, doing, done } = board.counts;
   if (todo + doing + done === 0) return EMPTY;
+  const pal = statuslinePalette(theme);
   const paint = (c, s) => (color ? `${c}${s}${RESET}` : s);
 
   // Doing is the live signal — bold amber when work is in flight. To-do/done stay dim.
+  // On a light terminal the palette swaps amber/dim for truecolour that stays legible.
   const parts = ['📋'];
-  if (doing > 0) parts.push(paint(BOLD + AMBER, `▶${doing}`));
-  parts.push(paint(DIM, `☐${todo}`));
-  parts.push(paint(DIM, `✓${done}`));
+  if (doing > 0) parts.push(paint(BOLD + pal.yellow, `▶${doing}`));
+  parts.push(paint(pal.dim, `☐${todo}`));
+  parts.push(paint(pal.dim, `✓${done}`));
   return parts.join(' ');
 }
 
@@ -77,7 +78,11 @@ async function main() {
     return;
   }
 
-  const line = buildFlowStatusline(board, { color: !flag('--no-color') && !process.env.NO_COLOR });
+  const themeArg = flag('--light') ? 'light' : opt('--theme', null);
+  const line = buildFlowStatusline(board, {
+    color: !flag('--no-color') && !process.env.NO_COLOR,
+    theme: resolveStatuslineTheme(themeArg),
+  });
 
   // Whole segment becomes a Ctrl+click hyperlink to the board (same as stickies).
   // Skipped under tmux (mangles OSC 8) and with --no-link (pass --no-link if OSC 8

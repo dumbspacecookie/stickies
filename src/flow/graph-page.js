@@ -6,6 +6,8 @@
 // force-directed). This page carries its OWN back-nav (Board, Stickies); the forward
 // board -> graph link is owned by board-page.js and is not touched here.
 
+import { themeStyle, themeBoot, themeToggleButton } from './theme.mjs';
+
 export function renderGraphPage({ project }) {
   const proj = String(project || '(global)');
   const escHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -41,6 +43,8 @@ export function renderGraphPage({ project }) {
   .edge { stroke: var(--muted); stroke-width: 1.6; fill: none; opacity: .55; }
   .banner { color: var(--muted); padding: 22px; }
 </style>
+${themeStyle()}
+${themeBoot()}
 </head>
 <body>
 <header>
@@ -52,6 +56,8 @@ export function renderGraphPage({ project }) {
     <span class="lg"><span class="sw doing"></span>Doing</span>
     <span class="lg"><span class="sw done"></span>Done</span>
   </span>
+  ${themeToggleButton()}
+  <a class="nav" href="/command">🛰 Command</a>
   <a class="nav" href="/board">📋 Board →</a>
   <a class="nav" href="/">🟡 Stickies →</a>
 </header>

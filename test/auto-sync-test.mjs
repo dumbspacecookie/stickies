@@ -25,6 +25,11 @@ g(WA, 'commit', '--allow-empty', '-m', 'init'); g(WA, 'branch', '-M', 'main'); g
 spawnSync('git', ['clone', REMOTE, WB], { encoding: 'utf8' });
 g(WB, 'config', 'user.email', 't@s.local'); g(WB, 'config', 'user.name', 'T');
 
+// These fixtures are temp DBs by design (two temp stores = two machines). The scratch-DB
+// guard would otherwise refuse to auto-sync them; opt back in explicitly. A real session
+// never sets this — see isScratchDb() in git-sync.js.
+process.env.STICKIES_ALLOW_SCRATCH_SYNC = '1';
+
 let fail = 0;
 const check = (c, m) => { console.log(`  ${c ? 'PASS' : 'FAIL'}  ${m}`); if (!c) fail++; };
 function machine(db, repo) { closeDb(); process.env.STICKIES_DB = db; if (repo) process.env.STICKIES_SYNC_REPO = repo; }

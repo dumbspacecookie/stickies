@@ -1,5 +1,5 @@
 // Derive a Kanban board (To-Do / Doing / Done) from a GSD .planning/ROADMAP.md.
-// Graduated from a proven scratchpad spike (tested against the live FLOPS roadmap).
+// Graduated from a proven scratchpad spike (tested against a real GSD roadmap).
 //
 // The one rule that matters: the ✅/⏳ emoji is NOT the signal. In real GSD roadmaps
 // "✅ Planned" and "✅ EXECUTED" both wear ✅ — so a phase is classified by the STATUS
@@ -199,13 +199,34 @@ export function scanPhaseDocs(projectPath, phaseCard) {
   };
 }
 
-// Board-level rollup: sum every card's checkbox progress into {done, total, pct}.
+// True progress = work DONE, not plans authored. A GSD phase's real completion signal is a
+// sibling NN-MM-SUMMARY.md (a plan is only summarized after it executes); its PLAN.md work
+// lives in <task> tags that carry no checkbox state, so the ROADMAP's own [x] boxes only ever
+// mean "plan written". So prefer the shipped tally (SUMMARY presence) when the phase has real
+// plan docs on disk, and fall back to the ROADMAP checkbox count for roadmaps with no phase
+// dirs (e.g. an inline-checkbox roadmap that hand-maintains its own progress).
+export function effectiveProgress(card) {
+  const roadmap = card ? card.progress : null;
+  const shipped = card && card.metadata && card.metadata.shipped;
+  if (shipped && typeof shipped.total === 'number' && shipped.total > 0) {
+    // done = plans actually executed (a SUMMARY exists). total = the fuller planned scope:
+    // the ROADMAP's plan list or what's on disk, whichever is larger, so a plan that's listed
+    // but not yet authored still counts against progress (it's real remaining work).
+    const total = Math.max(roadmap && roadmap.total ? roadmap.total : 0, shipped.total);
+    return { done: shipped.done, total };
+  }
+  return roadmap;
+}
+
+// Board-level rollup: sum every card's effective (execution-preferred) progress into
+// {done, total, pct}.
 function computeRollup(cards) {
   let done = 0, total = 0;
   for (const c of cards) {
-    if (c.progress && typeof c.progress.done === 'number' && typeof c.progress.total === 'number') {
-      done += c.progress.done;
-      total += c.progress.total;
+    const p = effectiveProgress(c);
+    if (p && typeof p.done === 'number' && typeof p.total === 'number') {
+      done += p.done;
+      total += p.total;
     }
   }
   return { done, total, pct: total > 0 ? Math.round((done / total) * 100) : 0 };

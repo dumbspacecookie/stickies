@@ -10,11 +10,12 @@ import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { readStickies, dismissSticky, createSticky, normalizeProjectPath } from './store.js';
+import { readStickies, dismissSticky, createSticky, normalizeProjectPath, projectSummaries } from './store.js';
 import { CATEGORIES, IMPORTANCES } from './db.js';
 import { renderPage } from './dashboard-page.js';
 import { renderBoardPage } from './flow/board-page.js';
 import { renderGraphPage } from './flow/graph-page.js';
+import { renderCommandPage } from './command-page.js';
 import { buildBoard, phaseCards } from './flow/board.mjs';
 import { derivePlanGraph } from './flow/derive-plans.mjs';
 import { crossLink } from './flow/cross-link.mjs';
@@ -22,6 +23,9 @@ import { readPhaseDoc } from './flow/phase-doc.mjs';
 import { maybeAutoSync } from './git-sync.js';
 
 const DEFAULT_PORT = 4317;
+// Ceiling on one bulk dismiss. Guards against a runaway client turning a single request
+// into an unbounded write loop; well above any plausible hand-selection.
+const MAX_BULK = 500;
 
 function parseArgs(argv) {
   const args = { port: Number(process.env.STICKIES_DASHBOARD_PORT) || DEFAULT_PORT, project: process.cwd(), open: false };
@@ -64,9 +68,55 @@ function mutationAllowed(req) {
   return true;
 }
 
+// Cross-project overview: every project with active stickies (plus the launched one, even if
+// it has none), each enriched with its Flow-board rollup/counts, sorted by what needs attention
+// (P1s, then blockers, then work in flight). Read-only aggregation over local paths this machine
+// has already stored notes for — no arbitrary path is read from the request.
+function buildCommandCenter() {
+  const byPath = new Map(projectSummaries().map((s) => [s.project_path, s]));
+  if (PROJECT && !byPath.has(PROJECT)) {
+    byPath.set(PROJECT, { project_path: PROJECT, stickies: { total: 0, p1: 0, p2: 0, p3: 0, blockers: 0 }, lastTouched: null });
+  }
+  const projects = [...byPath.values()].map((s) => {
+    const board = buildBoard(s.project_path);
+    return {
+      project_path: s.project_path,
+      current: s.project_path === PROJECT,
+      stickies: s.stickies,
+      lastTouched: s.lastTouched,
+      board: board.ok ? { ok: true, source: board.source, counts: board.counts, rollup: board.rollup || null } : { ok: false },
+    };
+  });
+  projects.sort((a, b) =>
+    (b.stickies.p1 - a.stickies.p1) ||
+    (b.stickies.blockers - a.stickies.blockers) ||
+    ((b.board.counts?.doing || 0) - (a.board.counts?.doing || 0)) ||
+    String(a.project_path).localeCompare(String(b.project_path))
+  );
+  const totals = projects.reduce((t, p) => {
+    t.projects++; t.p1 += p.stickies.p1; t.blockers += p.stickies.blockers;
+    if (p.board.rollup) { t.done += p.board.rollup.done; t.total += p.board.rollup.total; }
+    return t;
+  }, { projects: 0, p1: 0, blockers: 0, done: 0, total: 0 });
+  totals.pct = totals.total ? Math.round((totals.done / totals.total) * 100) : 0;
+  return { projects, totals, generatedAt: new Date().toISOString() };
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${port}`);
   const path = url.pathname;
+
+  // DNS-rebinding guard. The GET read routes are intentionally ungated (they only serve local
+  // data), but without a Host check a page on another site could rebind its own hostname to
+  // 127.0.0.1 and read every note + project path (/api/stickies, /api/command, …). The server
+  // binds loopback only, so a legitimate request's Host is always our own origin; reject anything
+  // else. Mirrors the Origin allowlist used for mutations.
+  const host = req.headers.host;
+  if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
+    res.writeHead(403, { 'content-type': 'text/plain' });
+    res.end('forbidden');
+    return;
+  }
 
   // Page
   if (req.method === 'GET' && path === '/') {
@@ -87,6 +137,17 @@ const server = createServer(async (req, res) => {
   if (req.method === 'GET' && path === '/graph') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     res.end(renderGraphPage({ project: PROJECT }));
+    return;
+  }
+
+  // Cross-project Command Center page + its aggregated read.
+  if (req.method === 'GET' && path === '/command') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(renderCommandPage({ project: PROJECT }));
+    return;
+  }
+  if (req.method === 'GET' && path === '/api/command') {
+    json(res, 200, buildCommandCenter());
     return;
   }
 
@@ -147,6 +208,28 @@ const server = createServer(async (req, res) => {
     return json(res, result.ok ? 200 : 404, result);
   }
 
+  // Bulk dismiss: N stickies, ONE sync. Per-sticky dismiss syncs on every call, so clearing
+  // 20 notes one by one meant 20 full git pull/commit/push cycles (~2.3s each). Hoisting the
+  // sync out of the loop makes the batch cost the same as a single dismiss.
+  // Ids are dismissed independently: an unknown or already-dismissed id is reported in
+  // failed[] rather than sinking the whole batch.
+  if (req.method === 'POST' && path === '/api/dismiss-bulk') {
+    if (!mutationAllowed(req)) return json(res, 403, { error: 'forbidden' });
+    const body = await readBody(req);
+    const ids = Array.isArray(body?.ids) ? body.ids.filter((i) => typeof i === 'string' && i) : null;
+    if (!ids || !ids.length) return json(res, 400, { error: 'ids[] required' });
+    if (ids.length > MAX_BULK) return json(res, 400, { error: `too many ids (max ${MAX_BULK})` });
+
+    const results = ids.map((id) => ({ id, ...dismissSticky(id, body.reason ?? 'dashboard bulk') }));
+    const dismissed = results.filter((r) => r.ok).length;
+    if (dismissed) maybeAutoSync(); // once, not per id
+    return json(res, 200, {
+      ok: true,
+      dismissed,
+      failed: results.filter((r) => !r.ok).map((r) => ({ id: r.id, error: r.error })),
+    });
+  }
+
   if (req.method === 'POST' && path === '/api/create') {
     if (!mutationAllowed(req)) return json(res, 403, { error: 'forbidden' });
     const body = await readBody(req);
@@ -157,6 +240,7 @@ const server = createServer(async (req, res) => {
         category: body.category,
         importance: body.importance || 'P2',
         tags: Array.isArray(body.tags) ? body.tags : [],
+        due_at: body.due || null, // raw token ("2h"/"2026-07-20"); createSticky resolves it
         project_path: body.global ? null : PROJECT,
         source: 'manual',
         origin: 'dashboard', // typed straight into the web board

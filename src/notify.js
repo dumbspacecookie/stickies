@@ -29,7 +29,7 @@ const EVENT_TITLE = {
 
 // Dashboard deep-link for a note. Clicking lands only on the machine running the
 // dashboard (localhost) — a desk convenience; the card content is what reads anywhere.
-const dashUrl = (id) => `http://127.0.0.1:${process.env.STICKIES_DASHBOARD_PORT || 4317}/#${id}`;
+const dashUrl = (id) => `http://127.0.0.1:${process.env.STICKIES_DASHBOARD_PORT || 4317}/#note-${id}`;
 
 let lastPostAt = 0;
 

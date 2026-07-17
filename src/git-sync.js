@@ -11,11 +11,15 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { importFromFile, exportToFile } from './sync.js';
+import { resolveDbPath } from './db.js';
 
+// windowsHide stops each git call flashing a console window on Windows. A sync fires
+// several of these back to back, so without it a single dismiss strobes the desktop.
 function git(repo, args) {
-  const r = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+  const r = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', windowsHide: true });
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
 }
 
@@ -23,10 +27,40 @@ export function resolveSyncRepo() {
   return process.env.STICKIES_SYNC_REPO || null;
 }
 
+// A store under the OS temp dir is a scratch/test database, never the operator's corpus.
+// Publishing one is always wrong: a test that points STICKIES_DB at a temp file but
+// inherits the real STICKIES_AUTO_SYNC + STICKIES_SYNC_REPO would export its fixtures into
+// the shared sync file, commit them, and push — after which every machine that syncs pulls
+// the fixtures in as real notes. That is exactly how ~40% of a live corpus became
+// GLOBAL_TASK/LOCAL_TASK rows, one pair per `npm test` run.
+//
+// Guarding here rather than in each test kills the whole class: a test cannot leak by
+// forgetting to blank the sync vars. Real stores live in ~/.stickies or a user-chosen
+// path; nobody keeps the notes they care about in %TEMP%, so this has no false positives.
+// The sync machinery's own end-to-end tests must sync a temp DB on purpose (two temp DBs
+// standing in for two machines). STICKIES_ALLOW_SCRATCH_SYNC=1 opts a temp store back in.
+// This is safe against the leak it guards: the leak needs the REAL session to carry sync
+// vars that reach a temp DB, and a real session never sets this flag — only the sync tests
+// do. The inheritance only ever runs test→real for AUTO_SYNC/SYNC_REPO, never this.
+export function isScratchDb(dbPath = resolveDbPath()) {
+  if (/^(1|true|yes|on)$/i.test(process.env.STICKIES_ALLOW_SCRATCH_SYNC || '')) return false;
+  try {
+    const norm = (p) => resolve(String(p)).replace(/\\/g, '/').toLowerCase();
+    const tmp = norm(tmpdir()).replace(/\/$/, '');
+    return norm(dbPath).startsWith(tmp + '/');
+  } catch {
+    return false; // unreadable path: fall back to the existing opt-in gate
+  }
+}
+
 // Auto-sync is opt-in: it only runs when STICKIES_AUTO_SYNC is truthy AND a sync repo is
-// configured. This keeps git operations from happening behind the user's back.
+// configured AND the store is a real one (not a temp/test DB — see isScratchDb).
+// This keeps git operations from happening behind the user's back.
 export function autoSyncEnabled() {
-  return /^(1|true|yes|on)$/i.test(process.env.STICKIES_AUTO_SYNC || '') && !!resolveSyncRepo();
+  if (!/^(1|true|yes|on)$/i.test(process.env.STICKIES_AUTO_SYNC || '')) return false;
+  if (!resolveSyncRepo()) return false;
+  if (isScratchDb()) return false;
+  return true;
 }
 
 // Best-effort sync used by the session hooks. Never throws — returns null when disabled

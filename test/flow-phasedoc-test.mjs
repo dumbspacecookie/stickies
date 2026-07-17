@@ -79,7 +79,15 @@ try {
   const p5 = gsd.cards.find((c) => c.phase === 'Phase 5');
   ok(p5.metadata.lastTouched === null, 'a phase with no dir has lastTouched === null');
 
-  ok(gsd.rollup.done === 1 && gsd.rollup.total === 2 && gsd.rollup.pct === 50, 'deriveGsdBoard rollup sums progress (1/2 => 50%)');
+  // True progress = EXECUTION, not authoring. The phase has 3 PLANs on disk and 0 SUMMARYs,
+  // so nothing has shipped yet: 0/3, 0% — even though the ROADMAP checked one plan box. The
+  // total is the fuller scope (3 on disk > 2 in the roadmap list).
+  ok(gsd.rollup.done === 0 && gsd.rollup.total === 3 && gsd.rollup.pct === 0, 'rollup counts shipped plans, not roadmap checkboxes (0/3 => 0%)');
+
+  // Ship one plan (its SUMMARY appears) and the rollup moves: 1/3 => 33%.
+  writeFileSync(join(phaseDir, '00-01-SUMMARY.md'), '# Summary\n\nDone.\n');
+  const gsd2 = deriveGsdBoard(root);
+  ok(gsd2.rollup.done === 1 && gsd2.rollup.total === 3 && gsd2.rollup.pct === 33, 'a shipped SUMMARY advances true progress (1/3 => 33%)');
 
   // buildBoard keeps its live provenance; cards carry docs[]/metadata through the columns.
   // (buildBoard-level rollup surfacing is added + tested in 00-01 Task 3.)

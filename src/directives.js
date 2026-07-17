@@ -16,11 +16,11 @@
 // tool round-trip.
 
 const CATEGORY = '(decision|blocker|preference|context|todo)';
-// One modifier blob (importance / `global` / #tags in any order), parsed out below —
-// an ordered grammar would silently ignore `global P1` while accepting `P1 global`.
+// One modifier blob (importance / `global` / #tags / due:<when> in any order), parsed out
+// below — an ordered grammar would silently ignore `global P1` while accepting `P1 global`.
 // Importance may arrive bracketed (`[P2]`) because the model often copies the
 // `[P1|P2|P3]` notation from the convention doc literally — tolerate it.
-const MODIFIER = String.raw`(?:\[?P[123]\]?|global|#[\w./-]+)`;
+const MODIFIER = String.raw`(?:\[?P[123]\]?|global|due:[\w:-]+|#[\w./-]+)`;
 const DIRECTIVE = new RegExp(
   String.raw`^\s*!!sticky\s+${CATEGORY}` + //   category
     String.raw`((?:\s+${MODIFIER})*)` + //      optional modifiers, any order
@@ -44,11 +44,15 @@ export function parseDirectives(text) {
     const importance = (modifiers.find((t) => /^\[?P[123]\]?$/i.test(t)) || 'P2').replace(/[[\]]/g, '').toUpperCase();
     const global = modifiers.some((t) => /^global$/i.test(t));
     const tags = modifiers.filter((t) => t.startsWith('#')).map((t) => t.slice(1).trim()).filter(Boolean);
+    // Raw due token (e.g. "1h", "2026-07-20"); resolved to an instant at capture time by
+    // the store, so the offset is measured from when the note is actually written.
+    const dueTok = modifiers.find((t) => /^due:/i.test(t));
+    const due = dueTok ? dueTok.slice(4) : null;
 
     const content = m[3].trim();
     if (!content) continue;
 
-    out.push({ category, importance, tags, global, content });
+    out.push({ category, importance, tags, global, content, due });
   }
 
   return out;

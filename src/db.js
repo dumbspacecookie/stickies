@@ -146,10 +146,12 @@ function initSchema(db) {
   addColumn('project_key', 'TEXT');
   addColumn('origin', 'TEXT');       // surface the note was written from (see src/origin.js)
   addColumn('session_id', 'TEXT');   // Claude session that produced it; NULL for manual/legacy
+  addColumn('due_at', 'TEXT');       // optional user deadline (ISO 8601); NULL = no due date
 
   // Safe now that the columns are guaranteed to exist (fresh schema or just migrated).
   db.exec(`CREATE INDEX IF NOT EXISTS idx_stickies_key ON stickies(project_key)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_stickies_session ON stickies(session_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_stickies_due ON stickies(due_at)`);
 }
 
 // Test/maintenance helper: close the cached connection.

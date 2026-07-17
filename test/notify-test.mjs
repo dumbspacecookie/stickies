@@ -44,10 +44,10 @@ const ENV_NO_EVENTS = { STICKIES_DISCORD_WEBHOOK: HOOK }; // webhook set, fireho
 
 const sticky = (over = {}) => ({
   id: 'id-1',
-  content: 'relight the collector',
+  content: 'ship the release',
   category: 'todo',
   importance: 'P1',
-  project_path: '/home/dev/flops',
+  project_path: '/home/dev/myapp',
   tags: [],
   created_at: '2026-07-14T00:00:00.000Z',
   updated_at: '2026-07-14T00:00:00.000Z',
@@ -83,7 +83,7 @@ ok(r1.ok === true, 'created event posts');
 ok(sent.length === 1, 'exactly one POST');
 ok(sent[0].url === HOOK, 'posts to the configured webhook');
 ok(sent[0].body.embeds[0].author.name.includes('added'), 'titled as an add');
-ok(sent[0].body.embeds[0].description.includes('relight the collector'), 'carries the note text');
+ok(sent[0].body.embeds[0].description.includes('ship the release'), 'carries the note text');
 
 // --- dismissed ----------------------------------------------------------------------
 sent.length = 0;
@@ -106,13 +106,13 @@ ok(/\+4 more/.test(sent[0].body.content || ''), 'says how many were withheld', '
 
 // --- digest ---------------------------------------------------------------------------
 sent.length = 0;
-await notifyDigest([sticky(), sticky({ id: 'id-2', importance: 'P3', content: 'minor thing' })], '/home/dev/flops', ENV);
+await notifyDigest([sticky(), sticky({ id: 'id-2', importance: 'P3', content: 'minor thing' })], '/home/dev/myapp', ENV);
 ok(sent.length === 1, 'digest posts once');
 ok(/P1/.test(sent[0].body.embeds[0].description), 'digest groups by priority');
-ok(/flops/.test(sent[0].body.embeds[0].title), 'digest names the project');
+ok(/myapp/.test(sent[0].body.embeds[0].title), 'digest names the project');
 
 sent.length = 0;
-await notifyDigest([], '/home/dev/flops', ENV);
+await notifyDigest([], '/home/dev/myapp', ENV);
 ok(/Clean board/.test(sent[0].body.content || ''), 'empty digest says the board is clean');
 
 // --- never fatal: a webhook that throws must not take the caller down -------------------
@@ -145,7 +145,7 @@ const rep = await notifySessionReport(
   {
     created: [sticky({ id: 'c1', content: 'park this' })],
     dismissed: [sticky({ id: 'd1', content: 'fixed that', importance: 'P2' })],
-    projectPath: '/home/dev/2_stickies',
+    projectPath: '/home/dev/webapp',
     startedAt: '2026-07-14T10:00:00.000Z',
     endedAt: '2026-07-14T11:30:00.000Z',
     sessionId: 'abcd1234-ffff',
@@ -155,12 +155,12 @@ const rep = await notifySessionReport(
 ok(rep.ok === true, 'session report posts with the default config (no firehose needed)');
 ok(sent.length === 1, 'session report is exactly one post');
 const emb = sent[0].body.embeds[0];
-ok(/2_stickies/.test(emb.title), 'report names the folder');
+ok(/webapp/.test(emb.title), 'report names the folder');
 ok(/Parked \(1\)/.test(emb.description), 'report lists what was parked');
 ok(/Cleared \(1\)/.test(emb.description), 'report lists what was cleared');
 ok(/park this/.test(emb.description) && /fixed that/.test(emb.description), 'report carries both note texts');
 ok(emb.fields.some((f) => /2026-07-14 10:00/.test(f.value) && /2026-07-14 11:30/.test(f.value)), 'report carries the session window (date + time)');
-ok(emb.fields.some((f) => /\/home\/dev\/2_stickies/.test(f.value)), 'report carries the full folder path');
+ok(emb.fields.some((f) => /\/home\/dev\/webapp/.test(f.value)), 'report carries the full folder path');
 ok(/abcd1234/.test(emb.footer.text), 'report carries the session id');
 
 sent.length = 0;

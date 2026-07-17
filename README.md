@@ -114,6 +114,7 @@ keeps the board self-sufficient — same repo-mode idea as the notes.
 stickies list                          # active notes for this dir + globals
 stickies list --all                    # every project + globals
 stickies add "ship the release" -c todo -i P1     # add a P1 todo to this project
+stickies add "pay invoice" -c todo --due 2d       # a deadline (30m/2h/1d/1w/tomorrow/YYYY-MM-DD)
 stickies add "call the bank" -c todo -p global    # a global todo — shows up everywhere
 stickies dismiss <id> -r "done"        # clear it
 stickies dashboard --open              # local web board, open the browser
@@ -160,6 +161,17 @@ this to your `settings.json`:
 By default it's compact — a count plus an urgency flag, e.g. `🟨 2!·19` (2 urgent of 19). It
 deliberately does **not** print note text (so nothing sensitive lands in your prompt); set
 `STICKIES_STATUSLINE_VERBOSE=1` if you want the top note's text too.
+
+**Light / dark.** A statusline can't repaint your terminal's background — it can only colour
+its own text — so the theme's job is to stay legible on whatever background you already have.
+The dark palette (default) uses the terminal's own bright colours; the light palette swaps in
+darker truecolour values that survive a white background (tuned to clear WCAG AA text contrast).
+Pick it with **`STICKIES_THEME=light`** (or `dark`) in your environment, or per-invocation with
+**`stickies status --light`** / `--theme dark`. On macOS/Linux terminals that publish `$COLORFGBG` it also
+autodetects; **Windows Terminal / PowerShell don't set that variable**, so on Windows set
+`STICKIES_THEME` explicitly if you run a light terminal. The dashboard (`/`, `/board`, `/graph`)
+is a real web page, so *it* gets a full ☾/☀ toggle that flips the whole background — that's a
+page it owns, unlike the statusline.
 
 **Clickable link.** In a terminal that supports OSC-8 hyperlinks (Windows Terminal, iTerm2,
 WezTerm, Kitty, Ghostty) the segment is a **Ctrl+click link that opens the dashboard**. Two

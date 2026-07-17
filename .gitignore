@@ -5,6 +5,13 @@ node_modules/
 mcp-publisher*
 *.tar.gz
 
+# Secrets / local state must never land in this public repo.
+.env
+.env.*
+.stickies
+keys.env
+*.pem
+
 # Guard: planning artifacts are tracked in the PRIVATE dev repo (stickies-dev) and must
 # never land here. This repo is public — a stray copy from the dev folder would publish
 # internal roadmap/phase notes. Ignored here so a careless copy is a no-op, not a leak.
