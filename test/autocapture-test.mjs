@@ -6,7 +6,9 @@ import { join } from 'node:path';
 
 const db = join(tmpdir(), 'stickies_autocap_test.db');
 for (const s of ['', '-wal', '-shm']) { try { rmSync(db + s); } catch {} }
-const env = { ...process.env, STICKIES_DB: db };
+// Blank the developer's real sync vars: otherwise the hook's post-capture maybeAutoSync()
+// pulls the real note repo into this temp DB and dedup/counts drift run-to-run.
+const env = { ...process.env, STICKIES_DB: db, STICKIES_AUTO_SYNC: '', STICKIES_SYNC_REPO: '', STICKIES_SYNC_FILE: '' };
 
 const cwd = join(tmpdir(), 'autocap_proj');
 const transcript = join(tmpdir(), 'autocap_transcript.jsonl');

@@ -27,6 +27,8 @@ export const CATEGORIES = Object.keys(CATEGORY_TTL_DAYS);
 export const IMPORTANCES = ['P1', 'P2', 'P3'];
 export const STATUSES = ['active', 'stale', 'dismissed'];
 export const SOURCES = ['auto', 'manual'];
+// Provenance surface a sticky was written from. See src/origin.js for labels/detection.
+export const ORIGINS = ['terminal', 'desktop', 'mobile', 'dashboard', 'unknown'];
 
 export const MAX_CONTENT_LENGTH = 500;
 export const MAX_TAGS = 20;
@@ -127,21 +129,27 @@ function initSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_stickies_expires ON stickies(expires_at);
   `);
 
-  // Migration: add project_key to DBs created before it existed. Old rows keep
-  // project_key NULL and continue to match by project_path (handled in reads).
+  // Migrations: additive nullable columns for DBs created before each existed. Old rows
+  // keep the new column NULL and degrade gracefully (project_key matches by path; origin
+  // renders as 'unknown'; session_id groups under an "unattributed" lane).
   const cols = db.prepare(`PRAGMA table_info(stickies)`).all();
-  if (!cols.some((c) => c.name === 'project_key')) {
+  const addColumn = (name, decl) => {
+    if (cols.some((c) => c.name === name)) return;
     try {
-      db.exec(`ALTER TABLE stickies ADD COLUMN project_key TEXT`);
+      db.exec(`ALTER TABLE stickies ADD COLUMN ${name} ${decl}`);
     } catch (err) {
       // Concurrent first-run: another process added the column between our check and
       // the ALTER. Anything other than that is a real error.
       if (!/duplicate column name/i.test(err?.message || '')) throw err;
     }
-  }
+  };
+  addColumn('project_key', 'TEXT');
+  addColumn('origin', 'TEXT');       // surface the note was written from (see src/origin.js)
+  addColumn('session_id', 'TEXT');   // Claude session that produced it; NULL for manual/legacy
 
-  // Safe now that project_key is guaranteed to exist (fresh schema or just migrated).
+  // Safe now that the columns are guaranteed to exist (fresh schema or just migrated).
   db.exec(`CREATE INDEX IF NOT EXISTS idx_stickies_key ON stickies(project_key)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_stickies_session ON stickies(session_id)`);
 }
 
 // Test/maintenance helper: close the cached connection.

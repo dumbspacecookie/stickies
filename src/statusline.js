@@ -43,25 +43,29 @@ function truncate(text, max) {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
-export function buildStatusline(stickies, { color = true, width = 60, icon = '🟨' } = {}) {
+export function buildStatusline(stickies, { color = true, width = 60, icon = '🟨', verbose = false } = {}) {
   if (!stickies.length) return EMPTY;
 
   const p1 = stickies.filter((s) => s.importance === 'P1');
   const paint = (c, s) => (color ? `${c}${s}${RESET}` : s);
+  const total = stickies.length;
 
-  const head = `${icon} ${stickies.length}`;
-
-  // No P1 -> a bare count. Nothing is on fire, so don't spend prompt width on detail.
-  if (!p1.length) {
-    return paint(DIM, `${head} pending`);
+  // Compact by default: counts only — total, plus a `N!` urgency flag when P1s exist
+  // (e.g. "🟨 2!·19"). Keeping this segment tiny stops it crowding the other statusline
+  // segments (flow board, GSD context) off a narrow prompt. The note text lives one click
+  // away in the dashboard; the statusline just needs to say "there are notes, N are hot".
+  if (!verbose) {
+    if (p1.length) return paint(BOLD + RED, `${icon} ${p1.length}!·${total}`);
+    return paint(DIM, `${icon} ${total}`);
   }
 
-  // P1 -> show the newest one's text; it is the thing the user actually needs to see.
+  // Verbose (STICKIES_STATUSLINE_VERBOSE=1): also surface the newest P1's text.
   // readStickies orders P1 first, newest first, so p1[0] is that note.
-  const rest = stickies.length - 1;
+  const head = `${icon} ${total}`;
+  if (!p1.length) return paint(DIM, `${head} pending`);
+  const rest = total - 1;
   const budget = Math.max(12, width - head.length - (rest > 0 ? 10 : 0));
   const lead = truncate(p1[0].content, budget);
-
   const parts = [
     paint(BOLD + RED, head),
     paint(YELLOW, lead),
@@ -119,12 +123,14 @@ async function main() {
     color: !flag('--no-color') && !process.env.NO_COLOR,
     width: Number(opt('--width', 60)) || 60,
     icon: flag('--no-icon') ? '*' : opt('--icon', '🟨'),
+    verbose: flag('--verbose') || process.env.STICKIES_STATUSLINE_VERBOSE === '1',
   });
 
   // Make the whole segment a Ctrl+click hyperlink that opens the dashboard (the full,
-  // clickable board — this project + global). Verified working in Windows Terminal;
-  // also iTerm2/WezTerm/Kitty/Ghostty. Skipped under tmux (it mangles OSC 8) and with
-  // --no-link. Needs the dashboard running (`stickies dashboard`) for the click to land.
+  // clickable board — this project + global). Works in Windows Terminal, iTerm2/WezTerm/
+  // Kitty/Ghostty. Skipped under tmux (mangles OSC 8) and with --no-link. If OSC 8
+  // interferes with mouse select-to-copy in your terminal, pass --no-link. Needs the
+  // dashboard running (`stickies dashboard`) for the click to land.
   const linkable = line && !flag('--no-link') && !process.env.TMUX;
   if (linkable) {
     const port = process.env.STICKIES_DASHBOARD_PORT || 4317;

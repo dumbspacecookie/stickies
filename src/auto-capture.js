@@ -97,7 +97,12 @@ async function main() {
   if (directives.length === 0) return;
 
   try {
-    const { created } = autoCapture(directives, projectPath);
+    // The Stop hook only fires inside Claude Code's CLI, so these notes are 'terminal';
+    // the event carries the session that produced them, for per-session grouping.
+    const { created } = autoCapture(directives, projectPath, {
+      origin: 'terminal',
+      session_id: event.session_id || null,
+    });
     if (created.length) {
       process.stderr.write(`stickies: auto-captured ${created.length} sticky(ies) this turn\n`);
       // Only sync when we actually captured something new (opt-in, best-effort).

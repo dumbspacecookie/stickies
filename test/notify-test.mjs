@@ -1,7 +1,30 @@
 // Discord notifier: opt-in, host-locked, batched, and never fatal.
 // No real network: global.fetch is stubbed and we assert on what would have been sent.
 
-import { parseWebhook, isEnabled, notify, notifyDigest, notifySessionReport, eventsEnabled, toEmbed } from '../src/notify.js';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// Point the stickies DB at a throwaway BEFORE importing anything that opens it (buildBoard
+// cross-links stickies), so this suite never touches the developer's real ~/.stickies store.
+process.env.STICKIES_DB = join(tmpdir(), `notify-test-${process.pid}-${Date.now()}.db`);
+
+import { parseWebhook, isEnabled, notify, notifyDigest, notifySessionReport, notifyBoard, eventsEnabled, toEmbed } from '../src/notify.js';
+
+// Hermetic board fixture: a throwaway project carrying a real .planning/ROADMAP.md, so the
+// board-backed assertions don't depend on THIS repo's cwd having a planning dir — it won't in
+// a published/npm checkout, only in the dev tree.
+const BOARD_PROJECT = mkdtempSync(join(tmpdir(), 'notify-board-'));
+mkdirSync(join(BOARD_PROJECT, '.planning'), { recursive: true });
+writeFileSync(join(BOARD_PROJECT, '.planning', 'ROADMAP.md'), [
+  '# Roadmap', '',
+  '### Phase 1: Foundations — ✅ COMPLETE',
+  '**Status:** ✅ Complete (3/3 plans)',
+  '- [x] 01-01-PLAN.md', '- [x] 01-02-PLAN.md', '- [x] 01-03-PLAN.md', '',
+  '### Phase 2: Build — in progress',
+  '**Status:** ⏳ in progress',
+  '- [x] 02-01-PLAN.md', '- [ ] 02-02-PLAN.md', '',
+].join('\n'));
 
 let pass = 0;
 let fail = 0;
@@ -24,7 +47,7 @@ const sticky = (over = {}) => ({
   content: 'relight the collector',
   category: 'todo',
   importance: 'P1',
-  project_path: 'C:/Users/ash/flops',
+  project_path: '/home/dev/flops',
   tags: [],
   created_at: '2026-07-14T00:00:00.000Z',
   updated_at: '2026-07-14T00:00:00.000Z',
@@ -83,13 +106,13 @@ ok(/\+4 more/.test(sent[0].body.content || ''), 'says how many were withheld', '
 
 // --- digest ---------------------------------------------------------------------------
 sent.length = 0;
-await notifyDigest([sticky(), sticky({ id: 'id-2', importance: 'P3', content: 'minor thing' })], 'C:/Users/ash/flops', ENV);
+await notifyDigest([sticky(), sticky({ id: 'id-2', importance: 'P3', content: 'minor thing' })], '/home/dev/flops', ENV);
 ok(sent.length === 1, 'digest posts once');
 ok(/P1/.test(sent[0].body.embeds[0].description), 'digest groups by priority');
 ok(/flops/.test(sent[0].body.embeds[0].title), 'digest names the project');
 
 sent.length = 0;
-await notifyDigest([], 'C:/Users/ash/flops', ENV);
+await notifyDigest([], '/home/dev/flops', ENV);
 ok(/Clean board/.test(sent[0].body.content || ''), 'empty digest says the board is clean');
 
 // --- never fatal: a webhook that throws must not take the caller down -------------------
@@ -122,7 +145,7 @@ const rep = await notifySessionReport(
   {
     created: [sticky({ id: 'c1', content: 'park this' })],
     dismissed: [sticky({ id: 'd1', content: 'fixed that', importance: 'P2' })],
-    projectPath: 'C:/Users/ash/Documents/4_Experiment/2_stickies',
+    projectPath: '/home/dev/2_stickies',
     startedAt: '2026-07-14T10:00:00.000Z',
     endedAt: '2026-07-14T11:30:00.000Z',
     sessionId: 'abcd1234-ffff',
@@ -137,14 +160,82 @@ ok(/Parked \(1\)/.test(emb.description), 'report lists what was parked');
 ok(/Cleared \(1\)/.test(emb.description), 'report lists what was cleared');
 ok(/park this/.test(emb.description) && /fixed that/.test(emb.description), 'report carries both note texts');
 ok(emb.fields.some((f) => /2026-07-14 10:00/.test(f.value) && /2026-07-14 11:30/.test(f.value)), 'report carries the session window (date + time)');
-ok(emb.fields.some((f) => /4_Experiment/.test(f.value)), 'report carries the full folder path');
+ok(emb.fields.some((f) => /\/home\/dev\/2_stickies/.test(f.value)), 'report carries the full folder path');
 ok(/abcd1234/.test(emb.footer.text), 'report carries the session id');
 
 sent.length = 0;
 const noop = await notifySessionReport({ created: [], dismissed: [], projectPath: 'x' }, ENV_NO_EVENTS);
 ok(noop.ok === false && sent.length === 0, 'a session that touched nothing posts nothing');
 
+// --- session report: a note's origin shows as a compact "from …" tag ----------------
+sent.length = 0;
+await notifySessionReport(
+  {
+    created: [sticky({ id: 'o1', content: 'wrote from a terminal', origin: 'terminal' })],
+    projectPath: 'x',
+    startedAt: '2026-07-14T10:00:00.000Z',
+    endedAt: '2026-07-14T11:00:00.000Z',
+  },
+  ENV_NO_EVENTS
+);
+ok(/from terminal/.test(sent[0].body.embeds[0].description), 'a note carries its origin as a "from …" tag');
+
+sent.length = 0;
+await notifySessionReport(
+  {
+    created: [sticky({ id: 'o2', content: 'no origin recorded' })], // sticky() carries no origin
+    projectPath: 'x',
+    startedAt: '2026-07-14T10:00:00.000Z',
+    endedAt: '2026-07-14T11:00:00.000Z',
+  },
+  ENV_NO_EVENTS
+);
+ok(!/ from /.test(sent[0].body.embeds[0].description), 'a note with no origin renders no origin tag');
+
+// --- session report: per-phase board status when the project has a flow board --------
+sent.length = 0;
+await notifySessionReport(
+  {
+    created: [sticky({ id: 'b1', content: 'board-backed project' })],
+    projectPath: BOARD_PROJECT, // throwaway project with a real .planning/ROADMAP.md
+    startedAt: '2026-07-14T10:00:00.000Z',
+    endedAt: '2026-07-14T11:00:00.000Z',
+  },
+  ENV_NO_EVENTS
+);
+const withBoard = sent[0].body.embeds[0].fields.find((f) => f.name === 'board');
+ok(withBoard && /Phase \d/.test(withBoard.value), 'report adds a board status field when the project has a flow board');
+ok(withBoard ? withBoard.value.length <= 1024 : false, 'board field stays within Discord\'s 1024-char value limit');
+
+sent.length = 0;
+await notifySessionReport(
+  {
+    created: [sticky({ id: 'b2', content: 'no board here' })],
+    projectPath: '/no/such/project/anywhere', // no .planning/ or .flow/ -> buildBoard ok:false
+    startedAt: '2026-07-14T10:00:00.000Z',
+    endedAt: '2026-07-14T11:00:00.000Z',
+  },
+  ENV_NO_EVENTS
+);
+ok(!sent[0].body.embeds[0].fields.some((f) => f.name === 'board'), 'a project with no board omits the board field');
+
+// --- notifyBoard: the standalone board card -----------------------------------------
+sent.length = 0;
+const boardCard = await notifyBoard(BOARD_PROJECT, ENV);
+ok(boardCard.ok === true && sent.length === 1, 'notifyBoard posts one card for a project with a board');
+ok(/flow board/.test(sent[0].body.embeds[0].title), 'board card is titled as a flow board');
+ok(sent[0].body.embeds[0].fields.some((f) => f.name === 'columns'), 'board card carries a columns breakdown');
+
+sent.length = 0;
+const noBoardCard = await notifyBoard('/no/such/project/anywhere', ENV);
+ok(noBoardCard.ok === false && sent.length === 0, 'notifyBoard posts nothing when the project has no board');
+
+sent.length = 0;
+const noHookCard = await notifyBoard(BOARD_PROJECT, {});
+ok(noHookCard.ok === false && sent.length === 0, 'notifyBoard with no webhook configured is a no-op');
+
 global.fetch = realFetch;
+rmSync(BOARD_PROJECT, { recursive: true, force: true });
 
 console.log('');
 if (fail) {

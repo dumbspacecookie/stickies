@@ -6,13 +6,19 @@ import { join } from 'node:path';
 
 const db = join(tmpdir(), 'stickies_dash_test.db');
 for (const s of ['', '-wal', '-shm']) { try { rmSync(db + s); } catch {} }
-const env = { ...process.env, STICKIES_DB: db };
+// Isolate from the developer's real sync config. An inherited STICKIES_AUTO_SYNC +
+// STICKIES_SYNC_REPO makes a dismiss trigger maybeAutoSync(), which pulls the real note
+// repo into this temp DB — so read counts jump around (the long-standing "count grows
+// each run" flake). Blanking the sync vars keeps the test hermetic.
+const NO_SYNC = { STICKIES_AUTO_SYNC: '', STICKIES_SYNC_REPO: '', STICKIES_SYNC_FILE: '' };
+const env = { ...process.env, STICKIES_DB: db, ...NO_SYNC };
 const PROJECT = join(tmpdir(), 'dash_proj');
 const PORT = 4399;
 const base = `http://127.0.0.1:${PORT}`;
 
 // Seed two stickies (one project, one global) via the store.
 process.env.STICKIES_DB = db;
+Object.assign(process.env, NO_SYNC);
 const { createSticky } = await import('../src/store.js');
 const target = createSticky({ content: 'dashboard target sticky', category: 'todo', importance: 'P1', project_path: PROJECT });
 createSticky({ content: 'a global note', category: 'preference', importance: 'P3', project_path: null });

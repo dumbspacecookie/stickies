@@ -7,7 +7,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createSticky, readStickies, dismissSticky } from './store.js';
-import { notify, notifyDigest, isEnabled as notifyEnabled } from './notify.js';
+import { notify, notifyDigest, notifyBoard, isEnabled as notifyEnabled } from './notify.js';
+import { exportBoardMd } from './flow/board.mjs';
 import { CATEGORIES, IMPORTANCES } from './db.js';
 import { maybeAutoSync } from './git-sync.js';
 
@@ -102,6 +103,7 @@ program
       tags,
       project_path: project,
       source: 'manual',
+      origin: 'terminal', // the CLI is only ever run from a terminal
     });
     console.log(`Added sticky ${sticky.id}`);
     if (sticky.redacted) console.log('  ⚠ a suspected secret was redacted from the content before saving');
@@ -256,6 +258,34 @@ program
       r.ok ? `Pushed ${stickies.length} open sticky(ies) to Discord.` : `Failed: ${r.error}`
     );
     process.exitCode = r.ok ? 0 : 1;
+  });
+
+// stickies board — write a GitHub-viewable BOARD.md (renders natively on github.com, so the
+// board is reachable from any phone browser), or post the board as a Discord card.
+program
+  .command('board')
+  .description('Export the flow board to a committable BOARD.md, or post it to Discord (--discord).')
+  .option('--project <path>', 'Project to scope to (defaults to cwd).')
+  .option('-o, --out <file>', 'Markdown output path (default: BOARD.md in the project).')
+  .option('--discord', 'Post the board as a Discord card instead of writing a file.')
+  .action(async (opts) => {
+    const project = opts.project || process.cwd();
+    if (opts.discord) {
+      if (!notifyEnabled()) {
+        console.error('No webhook configured. Set $STICKIES_DISCORD_WEBHOOK to a Discord webhook URL.');
+        process.exit(1);
+      }
+      const r = await notifyBoard(project);
+      console.log(r.ok ? 'Board posted → check your Discord channel.' : `Not posted: ${r.skipped || r.error}`);
+      process.exitCode = r.ok ? 0 : 1;
+      return;
+    }
+    const r = exportBoardMd(project, opts.out || join(project, 'BOARD.md'));
+    if (!r.ok) {
+      console.error(`No flow board for ${project} (needs .planning/ROADMAP.md or a .flow/ snapshot).`);
+      process.exit(1);
+    }
+    console.log(`Wrote ${r.outPath} (${r.source}). Commit it to view the board on GitHub.`);
   });
 
 // stickies init-repo — install repo-mode (committed store + hooks) into a project

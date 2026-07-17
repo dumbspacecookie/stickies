@@ -13,6 +13,7 @@ import {
 import { redactSecrets } from './redact.js';
 import { normalizeProjectPath } from './store-path.js';
 import { deriveProjectKey } from './project-key.js';
+import { normalizeOrigin } from './origin.js';
 
 export { normalizeProjectPath };
 
@@ -55,6 +56,8 @@ function rowToSticky(row) {
     updated_at: row.updated_at,
     expires_at: row.expires_at,
     source: row.source,
+    origin: row.origin ?? 'unknown',
+    session_id: row.session_id ?? null,
     status: row.status,
     dismiss_reason: row.dismiss_reason ?? null,
   };
@@ -78,6 +81,8 @@ export function createSticky({
   tags = [],
   project_path = null,
   source = 'auto',
+  origin = 'unknown',
+  session_id = null,
 }) {
   if (typeof content !== 'string' || content.trim() === '') {
     throw new Error('content is required and must be a non-empty string');
@@ -125,6 +130,8 @@ export function createSticky({
     updated_at: now,
     expires_at: computeExpiry(category, now),
     source,
+    origin: normalizeOrigin(origin),
+    session_id: session_id ? String(session_id) : null,
     status: 'active',
     dismiss_reason: null,
   };
@@ -132,10 +139,10 @@ export function createSticky({
   db.prepare(
     `INSERT INTO stickies
        (id, content, category, importance, project_path, project_key, tags,
-        created_at, updated_at, expires_at, source, status, dismiss_reason)
+        created_at, updated_at, expires_at, source, origin, session_id, status, dismiss_reason)
      VALUES
        (@id, @content, @category, @importance, @project_path, @project_key, @tags,
-        @created_at, @updated_at, @expires_at, @source, @status, @dismiss_reason)`
+        @created_at, @updated_at, @expires_at, @source, @origin, @session_id, @status, @dismiss_reason)`
   ).run(sticky);
 
   // `redacted` is informational only (not persisted) so callers can warn the user.
@@ -194,7 +201,7 @@ export function readStickies({
 // `items`: [{ category, importance, tags, global, content }]
 // An item marked `global` is stored unscoped (project_path null) so it surfaces in every
 // project, and dedups against other globals rather than against this project's notes.
-export function autoCapture(items, project_path) {
+export function autoCapture(items, project_path, { origin = 'unknown', session_id = null } = {}) {
   const db = getDb();
   const np = normalizeProjectPath(project_path);
   const created = [];
@@ -231,6 +238,8 @@ export function autoCapture(items, project_path) {
           tags: it.tags,
           project_path: scope,
           source: 'auto',
+          origin,
+          session_id,
         })
       );
     } catch {
@@ -281,6 +290,8 @@ export function upsertFromSync(rec) {
     // getting swept to 'stale' on every read. New expiries for TTL'd categories pass through.
     expires_at: CATEGORY_TTL_DAYS[rec.category] == null ? null : (rec.expires_at ?? null),
     source: rec.source === 'manual' ? 'manual' : 'auto',
+    origin: normalizeOrigin(rec.origin),
+    session_id: rec.session_id ? String(rec.session_id) : null,
     status: ['active', 'stale', 'dismissed'].includes(rec.status) ? rec.status : 'active',
     dismiss_reason: rec.dismiss_reason ?? null,
   };
@@ -290,10 +301,10 @@ export function upsertFromSync(rec) {
     db.prepare(
       `INSERT INTO stickies
          (id, content, category, importance, project_path, project_key, tags,
-          created_at, updated_at, expires_at, source, status, dismiss_reason)
+          created_at, updated_at, expires_at, source, origin, session_id, status, dismiss_reason)
        VALUES
          (@id, @content, @category, @importance, @project_path, @project_key, @tags,
-          @created_at, @updated_at, @expires_at, @source, @status, @dismiss_reason)`
+          @created_at, @updated_at, @expires_at, @source, @origin, @session_id, @status, @dismiss_reason)`
     ).run(row);
     return 'added';
   }
@@ -304,7 +315,8 @@ export function upsertFromSync(rec) {
       `UPDATE stickies SET
          content=@content, category=@category, importance=@importance, project_path=@project_path,
          project_key=@project_key, tags=@tags, created_at=@created_at, updated_at=@updated_at,
-         expires_at=@expires_at, source=@source, status=@status, dismiss_reason=@dismiss_reason
+         expires_at=@expires_at, source=@source, origin=@origin, session_id=@session_id,
+         status=@status, dismiss_reason=@dismiss_reason
        WHERE id=@id`
     ).run(row);
     return 'updated';

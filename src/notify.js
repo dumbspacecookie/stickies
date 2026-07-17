@@ -8,6 +8,8 @@
 // cannot become a secret-exfiltration path for anything the redactor recognises. It is
 // still an outbound copy of your notes — that's the deal you opt into by setting the env var.
 
+import { buildBoard } from './flow/board.mjs';
+
 const ENV_VAR = 'STICKIES_DISCORD_WEBHOOK';
 const TIMEOUT_MS = 3000;
 
@@ -64,6 +66,14 @@ function projectLabel(sticky) {
   return parts[parts.length - 1] || sticky.project_path;
 }
 
+// Short "where was this written" tag for a card. The origin values are already plain words;
+// we just render them as ` · from terminal`. Missing or 'unknown' origin gets no tag.
+const ORIGIN_LABEL = { terminal: 'terminal', desktop: 'desktop', mobile: 'mobile', dashboard: 'dashboard' };
+function originTag(sticky) {
+  const label = ORIGIN_LABEL[sticky && sticky.origin];
+  return label ? ` · from ${label}` : '';
+}
+
 // One sticky -> one rich Discord card: full content, priority colour, all metadata,
 // and a dashboard deep-link. This is the "see what the pin really is" popup.
 export function toEmbed(sticky, event = 'created') {
@@ -71,7 +81,7 @@ export function toEmbed(sticky, event = 'created') {
   const links = `[🔗 Open in dashboard →](${dashUrl(sticky.id)})  ·  \`dismiss ${sticky.id}\``;
   return {
     author: { name: EVENT_TITLE[event] ?? EVENT_TITLE.created },
-    title: `${BAND[sticky.importance] ?? ''} ${sticky.importance} · ${sticky.category}`.trim(),
+    title: `${BAND[sticky.importance] ?? ''} ${sticky.importance} · ${sticky.category}${originTag(sticky)}`.trim(),
     description: `**${shorten(sticky.content, 3500)}**\n\n${links}`,
     color: COLORS[sticky.importance] ?? COLORS.P3,
     fields: [
@@ -136,6 +146,57 @@ export async function notify(stickies, event = 'created', env = process.env) {
   return post(url, body);
 }
 
+// Per-phase board status line for the session report, derived from the project's flow board.
+// buildBoard() reads the filesystem, so it's wrapped: any failure (no board, unreadable
+// planning dir, thrown error) degrades to `null` — no field, never a throw inside notify.
+// Returns a Discord field capped at the 1024-char value limit, or null when there's no board.
+function boardField(projectPath) {
+  if (!projectPath) return null;
+  let board;
+  try {
+    board = buildBoard(projectPath);
+  } catch {
+    return null;
+  }
+  if (!board || !board.ok) return null;
+
+  const cards = [...(board.columns?.todo || []), ...(board.columns?.doing || []), ...(board.columns?.done || [])];
+  if (!cards.length) return null;
+
+  const phaseNum = (c) => {
+    const m = String((c && c.phase) || '').match(/(\d+)/);
+    return m ? Number(m[1]) : Infinity;
+  };
+  cards.sort((a, b) => phaseNum(a) - phaseNum(b));
+
+  const token = (c) => {
+    const label = c.phase || 'Phase ?';
+    if (c.blocked && c.blocked.count) return `${label} ⛔ blocked`;
+    const shipped = c.metadata && c.metadata.shipped;
+    if (shipped && shipped.total) return `${label} ✓ ${shipped.done}/${shipped.total}`;
+    return `${label} …`;
+  };
+  const tokens = cards.map(token);
+
+  // Greedily include phases; if we can't fit them all, close with "+N more" and stay under
+  // Discord's 1024-char field-value cap (reserve a little room for the suffix).
+  const MAX = 1024;
+  const RESERVE = 16;
+  const parts = [];
+  let len = 0;
+  for (const t of tokens) {
+    const add = (parts.length ? 3 : 0) + t.length; // ' · ' joiner
+    const suffixRoom = parts.length < tokens.length - 1 ? RESERVE : 0;
+    if (len + add + suffixRoom > MAX) break;
+    parts.push(t);
+    len += add;
+  }
+  if (!parts.length) return null;
+  const remaining = tokens.length - parts.length;
+  const value = parts.join(' · ') + (remaining > 0 ? ` · +${remaining} more` : '');
+  return { name: 'board', value, inline: false };
+}
+
 // The session report: one post at the end of a Claude Code session saying what happened to
 // the board — what got parked, what got cleared, in which folder, over what window.
 // This is the primary Discord surface; `notify()` above is the opt-in firehose.
@@ -156,7 +217,7 @@ export async function notifySessionReport(
     return Number.isNaN(d.getTime()) ? String(iso) : d.toISOString().replace('T', ' ').slice(0, 16);
   };
 
-  const line = (s) => `• \`${s.importance}\` (${s.category}) ${shorten(s.content, 160)}`;
+  const line = (s) => `• \`${s.importance}\` (${s.category}) ${shorten(s.content, 160)}${originTag(s)}`;
   const sections = [];
 
   if (created.length) {
@@ -171,18 +232,56 @@ export async function notifySessionReport(
     if (dismissed.length > 12) sections.push(`_…+${dismissed.length - 12} more_`);
   }
 
+  const fields = [
+    { name: 'folder', value: `\`${projectPath ?? 'global'}\``, inline: false },
+    { name: 'session', value: fmt(startedAt) + ' → ' + fmt(endedAt) + ' UTC', inline: false },
+  ];
+  const board = boardField(projectPath);
+  if (board) fields.push(board);
+
   return post(url, {
     embeds: [
       {
         title: `🗂️ ${folder} — session report`,
         description: shorten(sections.join('\n').trim(), 3800),
         color: created.some((s) => s.importance === 'P1') ? COLORS.P1 : COLORS.P2,
-        fields: [
-          { name: 'folder', value: `\`${projectPath ?? 'global'}\``, inline: false },
-          { name: 'session', value: fmt(startedAt) + ' → ' + fmt(endedAt) + ' UTC', inline: false },
-        ],
+        fields,
         footer: { text: sessionId ? `session ${String(sessionId).slice(0, 8)}` : 'stickies' },
         timestamp: endedAt || new Date().toISOString(),
+      },
+    ],
+  });
+}
+
+// Post the current flow board as a standalone card — a phone-glanceable snapshot of where
+// every phase stands (progress, column counts, per-phase shipped/blocked). Reuses the same
+// board-status field the session report appends. Opt-in + best-effort like everything here.
+export async function notifyBoard(projectPath, env = process.env) {
+  const url = parseWebhook(env[ENV_VAR]);
+  if (!url) return { ok: false, skipped: 'no webhook configured' };
+
+  let board;
+  try { board = buildBoard(projectPath); } catch { board = null; }
+  if (!board || !board.ok) return { ok: false, skipped: 'no flow board for this project' };
+
+  const folder = projectPath ? String(projectPath).split(/[/\\]/).filter(Boolean).pop() : 'global';
+  const c = board.counts || {};
+  const r = board.rollup;
+
+  const fields = [];
+  if (r && r.total) fields.push({ name: 'progress', value: `${r.done}/${r.total} plans (${r.pct}%)`, inline: false });
+  fields.push({ name: 'columns', value: `☐ ${c.todo || 0} to-do · ▶ ${c.doing || 0} doing · ✓ ${c.done || 0} done`, inline: false });
+  const bf = boardField(projectPath);
+  if (bf) fields.push(bf);
+
+  return post(url, {
+    embeds: [
+      {
+        title: `📋 ${folder} — flow board`,
+        color: COLORS.P2,
+        fields,
+        footer: { text: 'stickies board' },
+        timestamp: new Date().toISOString(),
       },
     ],
   });

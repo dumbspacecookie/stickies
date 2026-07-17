@@ -2,6 +2,8 @@
 // inserted via textContent in the client script, never innerHTML, so note bodies can't
 // inject markup into the dashboard.
 
+import { relativeTime } from './flow/relative-time.mjs';
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -30,6 +32,8 @@ export function renderPage({ token, project, categories, importances }) {
   .toggle { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 3px; }
   .toggle button { background: transparent; color: var(--muted); border: 0; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
   .toggle button.active { background: #333a47; color: var(--ink); }
+  a.nav { color: var(--muted); text-decoration: none; border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; font-size: 12px; }
+  a.nav:hover { color: var(--ink); border-color: var(--muted); }
   main { padding: 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; align-items: start; }
   /* "All projects" groups into one lane per project — a flat wall of every project's notes
      at once is unreadable, which defeats the point of looking at the board. */
@@ -55,6 +59,8 @@ export function renderPage({ token, project, categories, importances }) {
   .card .body { white-space: pre-wrap; word-break: break-word; }
   .card .meta { margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 11px; }
   .tag { background: #2f3643; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; font-size: 11px; color: #b9c2d2; }
+  .phase-chip { background: #2c3a4a; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; font-size: 11px; color: #9cc4ff; text-decoration: none; }
+  .phase-chip:hover { border-color: var(--todo); color: #cfe4ff; }
   .glob { color: var(--context); }
   .card .meta .spacer { flex: 1; }
   .dismiss { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 3px 9px; cursor: pointer; font-size: 11px; }
@@ -66,6 +72,9 @@ export function renderPage({ token, project, categories, importances }) {
   form#add label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 5px; }
   form#add button { background: #3a4a6b; color: #fff; border: 0; border-radius: 7px; padding: 8px 14px; cursor: pointer; font-size: 13px; }
   .ttl { font-variant-numeric: tabular-nums; }
+  .orig { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .when { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; cursor: default; }
+  .lane-head .orig { margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -76,7 +85,9 @@ export function renderPage({ token, project, categories, importances }) {
   <div class="toggle">
     <button id="tProject" class="active">This project</button>
     <button id="tAll">All projects</button>
+    <button id="tSession">By session</button>
   </div>
+  <a class="nav" href="/board">📋 Flow Board →</a>
 </header>
 
 <form id="add">
@@ -92,7 +103,8 @@ export function renderPage({ token, project, categories, importances }) {
 
 <script>
   const TOKEN = ${JSON.stringify(token)};
-  let scopeAll = false;
+  // view: 'project' (this folder) | 'all' (grouped by folder) | 'session' (grouped by session)
+  let view = 'project';
 
   function ttl(expires) {
     if (!expires) return '';
@@ -103,6 +115,22 @@ export function renderPage({ token, project, categories, importances }) {
     const hrs = Math.floor(ms / 3600000);
     return hrs + 'h left';
   }
+
+  // Relative "born" time — the shared, unit-tested relativeTime() embedded verbatim so the
+  // browser and the tests format ages identically. Accepts an ISO string or epoch ms; the
+  // absolute local timestamp goes in the title attr for hover.
+  const ago = ${relativeTime.toString()};
+
+  const ORIGIN_LABELS = {
+    terminal: '💻 terminal', desktop: '🖥️ desktop', mobile: '📱 mobile',
+    dashboard: '🟡 dashboard', unknown: '',
+  };
+  function originLabel(o) { return ORIGIN_LABELS[o] || ''; }
+
+  // Compact glyph per category, so the top row reads as an icon + label badge.
+  const CAT_ICONS = {
+    blocker: '🔴', todo: '📝', decision: '🧭', preference: '⭐', context: '💬',
+  };
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -115,12 +143,28 @@ export function renderPage({ token, project, categories, importances }) {
     const c = el('div', 'card ' + s.category);
     const top = el('div', 'top');
     top.append(el('span', 'badge ' + s.importance.toLowerCase(), s.importance));
-    top.append(el('span', 'cat', s.category));
+    const catIco = CAT_ICONS[s.category] ? CAT_ICONS[s.category] + ' ' : '';
+    top.append(el('span', 'cat', catIco + s.category));
     c.append(top);
     c.append(el('div', 'body', s.content));
     const meta = el('div', 'meta');
     for (const t of (s.tags || [])) meta.append(el('span', 'tag', t));
     if (!s.project_path) meta.append(el('span', 'glob', '🌐 global'));
+    // Cross-link: when the store associated this note with a flow-board phase, a clickable
+    // chip to /board. Label is set via textContent (el); the href is the static board route.
+    if (s.phase) {
+      const a = el('a', 'phase-chip', '📋 ' + (s.phase.phase || 'phase'));
+      a.setAttribute('href', '/board');
+      a.title = s.phase.title ? (s.phase.phase + ' — ' + s.phase.title) : (s.phase.phase || '');
+      meta.append(a);
+    }
+    const ol = originLabel(s.origin);
+    if (ol) meta.append(el('span', 'orig', ol));
+    if (s.created_at) {
+      const when = el('span', 'when', ago(s.created_at));
+      when.title = new Date(s.created_at).toLocaleString(); // exact time on hover
+      meta.append(when);
+    }
     meta.append(el('span', 'spacer'));
     meta.append(el('span', 'ttl', ttl(s.expires_at)));
     const btn = el('button', 'dismiss', 'dismiss');
@@ -144,11 +188,12 @@ export function renderPage({ token, project, categories, importances }) {
   const ORDER = { P1: 0, P2: 1, P3: 2 };
   const byImportance = (a, b) => ORDER[a.importance] - ORDER[b.importance];
 
-  function lane(key, items) {
+  // A grouping lane. headParts is a pre-built array of header spans so project- and
+  // session-grouping can label their lanes differently while sharing the card grid.
+  function lane(headParts, items) {
     const l = el('section', 'lane');
     const head = el('div', 'lane-head');
-    head.append(el('span', 'name', projectName(key)));
-    if (key) head.append(el('span', 'path', key));
+    for (const p of headParts) head.append(p);
     head.append(el('span', 'count', items.length + (items.length === 1 ? ' note' : ' notes')));
     l.append(head);
     const cards = el('div', 'cards');
@@ -157,7 +202,38 @@ export function renderPage({ token, project, categories, importances }) {
     return l;
   }
 
+  function projectHead(key) {
+    const parts = [el('span', 'name', projectName(key))];
+    if (key) parts.push(el('span', 'path', key));
+    return parts;
+  }
+
+  // Short, human session tag — the head of the uuid is enough to tell two sessions apart.
+  function sessionLabel(id) { return id ? 'session ' + String(id).slice(0, 8) : '⚑ unattributed'; }
+  function sessionHead(key, items) {
+    const parts = [el('span', 'name', sessionLabel(key))];
+    // Show the surface the session ran on (the newest note's origin — one session = one surface).
+    const ol = originLabel(items[0] && items[0].origin);
+    if (ol) parts.push(el('span', 'orig', ol));
+    // Which folder this session touched, so a bare session id still has context.
+    const proj = items.find((s) => s.project_path);
+    if (proj) parts.push(el('span', 'path', projectName(proj.project_path)));
+    return parts;
+  }
+
+  function groupBy(items, keyFn) {
+    const groups = new Map();
+    for (const s of items) {
+      const k = keyFn(s) || '';
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(s);
+    }
+    return groups;
+  }
+
   async function load() {
+    // Session and folder views both need every project's notes; "this project" doesn't.
+    const scopeAll = view !== 'project';
     const r = await fetch('/api/stickies?all=' + (scopeAll ? '1' : '0'), { cache: 'no-store' });
     const data = await r.json();
     const grid = document.getElementById('grid');
@@ -165,25 +241,37 @@ export function renderPage({ token, project, categories, importances }) {
     grid.className = scopeAll ? 'grouped' : '';
     if (!data.stickies.length) { grid.append(el('div', 'empty', 'No active stickies.')); return; }
 
-    if (!scopeAll) {
+    if (view === 'project') {
       data.stickies.sort(byImportance);
       for (const s of data.stickies) grid.append(card(s));
       return;
     }
 
-    const groups = new Map();
-    for (const s of data.stickies) {
-      const k = s.project_path || '';
-      if (!groups.has(k)) groups.set(k, []);
-      groups.get(k).push(s);
+    if (view === 'session') {
+      const groups = groupBy(data.stickies, (s) => s.session_id);
+      // Most-recent session first (by newest note); unattributed sinks to the bottom.
+      const newest = (items) => items.reduce((m, s) => s.created_at > m ? s.created_at : m, '');
+      const keys = [...groups.keys()].sort((a, b) => {
+        if (a === '') return 1;
+        if (b === '') return -1;
+        return newest(groups.get(b)).localeCompare(newest(groups.get(a)));
+      });
+      for (const k of keys) {
+        const items = groups.get(k).sort(byImportance);
+        grid.append(lane(sessionHead(k, items), items));
+      }
+      return;
     }
+
+    // view === 'all': group by folder.
+    const groups = groupBy(data.stickies, (s) => s.project_path);
     // Globals last: they're the ambient ones, not the project you came here to look at.
     const keys = [...groups.keys()].sort((a, b) => {
       if (a === '') return 1;
       if (b === '') return -1;
       return projectName(a).localeCompare(projectName(b));
     });
-    for (const k of keys) grid.append(lane(k, groups.get(k).sort(byImportance)));
+    for (const k of keys) grid.append(lane(projectHead(k), groups.get(k).sort(byImportance)));
   }
 
   async function dismiss(id) {
@@ -213,8 +301,17 @@ export function renderPage({ token, project, categories, importances }) {
     load();
   });
 
-  document.getElementById('tProject').onclick = () => { scopeAll = false; document.getElementById('tProject').classList.add('active'); document.getElementById('tAll').classList.remove('active'); load(); };
-  document.getElementById('tAll').onclick = () => { scopeAll = true; document.getElementById('tAll').classList.add('active'); document.getElementById('tProject').classList.remove('active'); load(); };
+  const TOGGLES = { project: 'tProject', all: 'tAll', session: 'tSession' };
+  function setView(v) {
+    view = v;
+    for (const [name, id] of Object.entries(TOGGLES)) {
+      document.getElementById(id).classList.toggle('active', name === v);
+    }
+    load();
+  }
+  document.getElementById('tProject').onclick = () => setView('project');
+  document.getElementById('tAll').onclick = () => setView('all');
+  document.getElementById('tSession').onclick = () => setView('session');
 
   load();
   setInterval(load, 5000);

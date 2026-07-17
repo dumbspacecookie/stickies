@@ -11,6 +11,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 
 import { createSticky, readStickies, dismissSticky } from './store.js';
+import { detectOrigin } from './origin.js';
 import { notify } from './notify.js';
 import { CATEGORIES, IMPORTANCES } from './db.js';
 
@@ -80,6 +81,7 @@ server.registerTool(
       tags,
       project_path: project_path ?? null,
       source: 'auto',
+      origin: detectOrigin(), // MCP host: Claude Code (terminal) vs Claude Desktop
     });
     await notify(sticky, 'created');
     const note = sticky.redacted

@@ -8,9 +8,17 @@
 
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { readStickies, dismissSticky, createSticky, normalizeProjectPath } from './store.js';
 import { CATEGORIES, IMPORTANCES } from './db.js';
 import { renderPage } from './dashboard-page.js';
+import { renderBoardPage } from './flow/board-page.js';
+import { renderGraphPage } from './flow/graph-page.js';
+import { buildBoard, phaseCards } from './flow/board.mjs';
+import { derivePlanGraph } from './flow/derive-plans.mjs';
+import { crossLink } from './flow/cross-link.mjs';
+import { readPhaseDoc } from './flow/phase-doc.mjs';
 import { maybeAutoSync } from './git-sync.js';
 
 const DEFAULT_PORT = 4317;
@@ -22,6 +30,9 @@ function parseArgs(argv) {
     else if (argv[i] === '--project') args.project = argv[++i];
     else if (argv[i] === '--open') args.open = true;
   }
+  // Resolve to an absolute path so the board header shows the real launching folder
+  // (not a bare "." when started with --project .) and so .planning reads are unambiguous.
+  args.project = resolve(args.project);
   return args;
 }
 
@@ -64,12 +75,64 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // Flow board page (Kanban derived from the project's GSD .planning/ROADMAP.md).
+  if (req.method === 'GET' && path === '/board') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(renderBoardPage({ project: PROJECT }));
+    return;
+  }
+
+  // Flow graph page: the plan-execution DAG (self-contained SVG, its own back-nav to
+  // /board and /). Mirrors the /board route; does not touch board-page.js.
+  if (req.method === 'GET' && path === '/graph') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(renderGraphPage({ project: PROJECT }));
+    return;
+  }
+
+  // Read: the derived flow board for the current project.
+  if (req.method === 'GET' && path === '/api/board') {
+    json(res, 200, buildBoard(PROJECT));
+    return;
+  }
+
+  // Read: the plan-execution DAG {nodes, edges}. Live derivation of the project's PLAN.md
+  // frontmatter, or — in the repo-mode path with no .planning/ — the committed
+  // .flow/graph.json snapshot. application/json only, loopback-only, like /api/board.
+  if (req.method === 'GET' && path === '/api/plan-graph') {
+    let graph = derivePlanGraph(PROJECT);
+    if (!graph) {
+      try { graph = JSON.parse(readFileSync(join(PROJECT || '', '.flow', 'graph.json'), 'utf8')); }
+      catch { graph = { nodes: [], edges: [] }; }
+    }
+    json(res, 200, graph);
+    return;
+  }
+
+  // Read: a single path-confined .planning/ doc as tokenized JSON (never text/html, so a
+  // .md can't be served as an executable page). Read-only + loopback-only, like /api/board;
+  // readPhaseDoc rejects any path that escapes the project's .planning/ dir.
+  if (req.method === 'GET' && path === '/api/phase-doc') {
+    json(res, 200, readPhaseDoc(PROJECT, url.searchParams.get('path') || ''));
+    return;
+  }
+
   // Read: stickies for the current project (+globals), or all projects.
   if (req.method === 'GET' && path === '/api/stickies') {
     const scopeAll = url.searchParams.get('all') === '1';
     const stickies = scopeAll
       ? readStickies({ project_path: null, include_global: true, limit: 500 })
       : readStickies({ project_path: PROJECT, include_global: true, limit: 500 });
+    // Cross-link each sticky to a flow-board phase (for the card's phase chip). Phases come
+    // from THIS project's board; in the all-projects view only this project's stickies can
+    // chip, which is correct — the chip links to this board's /board.
+    try {
+      const { perSticky } = crossLink(phaseCards(PROJECT), stickies);
+      for (const s of stickies) {
+        const link = perSticky[s.id];
+        if (link) s.phase = { id: link.id, phase: link.phase, title: link.title };
+      }
+    } catch { /* phase enrichment is best-effort; never fail the read over it */ }
     json(res, 200, { project: PROJECT, scopeAll, count: stickies.length, stickies });
     return;
   }
@@ -96,6 +159,7 @@ const server = createServer(async (req, res) => {
         tags: Array.isArray(body.tags) ? body.tags : [],
         project_path: body.global ? null : PROJECT,
         source: 'manual',
+        origin: 'dashboard', // typed straight into the web board
       });
       maybeAutoSync();
       return json(res, 200, { ok: true, sticky });

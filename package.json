@@ -1,6 +1,6 @@
 {
   "name": "stickies-mcp",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "mcpName": "io.github.dumbspacecookie/stickies",
   "description": "A persistent sticky-note layer for Claude Code, exposed as an MCP server.",
   "type": "module",
@@ -32,7 +32,7 @@
     "cli": "node --disable-warning=ExperimentalWarning src/cli.js",
     "dashboard": "node --disable-warning=ExperimentalWarning src/dashboard.js",
     "demo": "node --disable-warning=ExperimentalWarning demo/showcase.mjs",
-    "test": "node --disable-warning=ExperimentalWarning test/redteam.mjs && node --disable-warning=ExperimentalWarning test/autocapture-test.mjs && node --disable-warning=ExperimentalWarning test/turn-boundary-test.mjs && node --disable-warning=ExperimentalWarning test/todo-global-test.mjs && node --disable-warning=ExperimentalWarning test/dashboard-test.mjs && node --disable-warning=ExperimentalWarning test/sync-test.mjs && node --disable-warning=ExperimentalWarning test/git-sync-test.mjs && node --disable-warning=ExperimentalWarning test/project-key-test.mjs && node --disable-warning=ExperimentalWarning test/auto-sync-test.mjs && node --disable-warning=ExperimentalWarning test/migration-test.mjs && node --disable-warning=ExperimentalWarning test/resilience-test.mjs && node --disable-warning=ExperimentalWarning test/notify-test.mjs && node --disable-warning=ExperimentalWarning test/strip-claudemd-test.mjs",
+    "test": "node --disable-warning=ExperimentalWarning test/redteam.mjs && node --disable-warning=ExperimentalWarning test/autocapture-test.mjs && node --disable-warning=ExperimentalWarning test/turn-boundary-test.mjs && node --disable-warning=ExperimentalWarning test/todo-global-test.mjs && node --disable-warning=ExperimentalWarning test/dashboard-test.mjs && node --disable-warning=ExperimentalWarning test/sync-test.mjs && node --disable-warning=ExperimentalWarning test/git-sync-test.mjs && node --disable-warning=ExperimentalWarning test/project-key-test.mjs && node --disable-warning=ExperimentalWarning test/auto-sync-test.mjs && node --disable-warning=ExperimentalWarning test/migration-test.mjs && node --disable-warning=ExperimentalWarning test/resilience-test.mjs && node --disable-warning=ExperimentalWarning test/notify-test.mjs && node --disable-warning=ExperimentalWarning test/strip-claudemd-test.mjs && node --disable-warning=ExperimentalWarning test/flow-test.mjs && node --disable-warning=ExperimentalWarning test/flow-docs-test.mjs && node --disable-warning=ExperimentalWarning test/flow-phasedoc-test.mjs && node --disable-warning=ExperimentalWarning test/flow-graph-test.mjs && node --disable-warning=ExperimentalWarning test/flow-gsddoc-test.mjs && node --disable-warning=ExperimentalWarning test/relative-time-test.mjs && node --disable-warning=ExperimentalWarning test/cross-link-test.mjs && node --disable-warning=ExperimentalWarning test/flow-status-test.mjs && node --disable-warning=ExperimentalWarning test/statusline-test.mjs",
     "test:security": "node --disable-warning=ExperimentalWarning test/redteam.mjs",
     "test:mcp": "node test/mcp-smoke.mjs",
     "test:autocapture": "node --disable-warning=ExperimentalWarning test/autocapture-test.mjs",
@@ -45,7 +45,11 @@
     "test:autosync": "node --disable-warning=ExperimentalWarning test/auto-sync-test.mjs",
     "test:migration": "node --disable-warning=ExperimentalWarning test/migration-test.mjs",
     "test:resilience": "node --disable-warning=ExperimentalWarning test/resilience-test.mjs",
-    "test:notify": "node --disable-warning=ExperimentalWarning test/notify-test.mjs && node --disable-warning=ExperimentalWarning test/strip-claudemd-test.mjs"
+    "test:notify": "node --disable-warning=ExperimentalWarning test/notify-test.mjs && node --disable-warning=ExperimentalWarning test/strip-claudemd-test.mjs",
+    "test:relativetime": "node --disable-warning=ExperimentalWarning test/relative-time-test.mjs",
+    "test:crosslink": "node --disable-warning=ExperimentalWarning test/cross-link-test.mjs",
+    "test:flowstatus": "node --disable-warning=ExperimentalWarning test/flow-status-test.mjs",
+    "test:statusline": "node --disable-warning=ExperimentalWarning test/statusline-test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
