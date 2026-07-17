@@ -4,3 +4,9 @@ node_modules/
 *.db-wal
 mcp-publisher*
 *.tar.gz
+
+# Guard: planning artifacts are tracked in the PRIVATE dev repo (stickies-dev) and must
+# never land here. This repo is public — a stray copy from the dev folder would publish
+# internal roadmap/phase notes. Ignored here so a careless copy is a no-op, not a leak.
+.planning/
+.flow/
