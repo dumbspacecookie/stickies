@@ -15,6 +15,7 @@
     "src",
     "hooks",
     "commands",
+    "skills",
     ".claude-plugin",
     ".mcp.json",
     "README.md",
