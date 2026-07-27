@@ -11,7 +11,7 @@ import {
   MAX_TAG_LENGTH,
 } from './db.js';
 import { redactSecrets } from './redact.js';
-import { normalizeProjectPath } from './store-path.js';
+import { normalizeProjectPath, isUnsafeProjectPath } from './store-path.js';
 import { deriveProjectKey } from './project-key.js';
 import { normalizeOrigin } from './origin.js';
 import { resolveDueDate } from './due.js';
@@ -103,6 +103,12 @@ export function createSticky({
 }) {
   if (typeof content !== 'string' || content.trim() === '') {
     throw new Error('content is required and must be a non-empty string');
+  }
+  // A project path carrying markup characters normalizes to null, and null means GLOBAL — so
+  // silently accepting one would file the note into every project's digest, which is the exact
+  // boundary the scoping exists to hold. Refuse it out loud instead.
+  if (isUnsafeProjectPath(project_path)) {
+    throw new Error('project_path contains characters that are not valid in a filesystem path');
   }
   if (content.length > MAX_CONTENT_LENGTH) {
     throw new Error(`content exceeds ${MAX_CONTENT_LENGTH} characters (got ${content.length})`);
@@ -216,6 +222,24 @@ export function readStickies({
 // Every project (distinct non-null project_path) with active stickies, plus a per-importance
 // count and a blocker tally — the raw material for the cross-project command center. Globals
 // (project_path IS NULL) belong to no single project and are excluded here.
+// Every project this machine has ever stored a note for, whatever became of those notes.
+//
+// Deliberately NOT projectSummaries(): that one filters `status = 'active'` because it feeds a
+// display of what is on your board right now. Using it for the dashboard's project allowlist
+// meant a project UN-REGISTERED itself the moment you dismissed its last note — so clearing your
+// board, the tidy thing to do, is what took the board away. The Flow Board reads ROADMAP.md and
+// has nothing to do with stickies at all, so a project with a roadmap and an empty note board
+// could never be opened again.
+//
+// A dismissed note is still evidence that this is a project of yours, which is exactly what the
+// allowlist is asking. No sweepExpired() here either: rebuilding an allowlist should not write.
+export function registeredProjects() {
+  return getDb()
+    .prepare('SELECT DISTINCT project_path AS path FROM stickies WHERE project_path IS NOT NULL')
+    .all()
+    .map((r) => r.path);
+}
+
 export function projectSummaries() {
   const db = getDb();
   sweepExpired(db);
@@ -248,6 +272,11 @@ export function projectSummaries() {
 // project, and dedups against other globals rather than against this project's notes.
 export function autoCapture(items, project_path, { origin = 'unknown', session_id = null } = {}) {
   const db = getDb();
+  // Same rule as createSticky: normalizing an unsafe path yields null, and null means GLOBAL —
+  // so accepting one would file every captured note into every project's digest.
+  if (isUnsafeProjectPath(project_path)) {
+    throw new Error('project_path contains characters that are not valid in a filesystem path');
+  }
   const np = normalizeProjectPath(project_path);
   const created = [];
   let skipped = 0;
@@ -256,7 +285,18 @@ export function autoCapture(items, project_path, { origin = 'unknown', session_i
     const scope = it.global ? null : np;
 
     // Compute the exact value createSticky will store, so dedup matches reality.
-    const storedContent = redactSecrets(String(it.content || '').trim()).text;
+    //
+    // Length-checked BEFORE redaction, not after. createSticky rejects anything over the cap, so
+    // an over-long directive was going to be refused either way — but redacting first meant the
+    // regexes ran on unbounded text from a transcript, and the assignment lookahead is
+    // catastrophic on `_`-segmented input: a 14KB run measured 818ms, 130KB measured 17s. That is
+    // the post-turn hook, on every turn, driven by whatever text is in the transcript.
+    const rawContent = String(it.content || '').trim();
+    if (rawContent.length > MAX_CONTENT_LENGTH) {
+      skipped++;
+      continue;
+    }
+    const storedContent = redactSecrets(rawContent).text;
     if (!storedContent) {
       skipped++;
       continue;
@@ -317,15 +357,24 @@ export function exportAllRows() {
 export function upsertFromSync(rec) {
   if (!rec || typeof rec.id !== 'string') return 'skipped';
   if (!CATEGORIES.includes(rec.category) || !IMPORTANCES.includes(rec.importance)) return 'skipped';
+  // The sync document is a shared file from another machine — the genuinely untrusted input.
+  // A record whose project_path normalizes to null would be imported as a GLOBAL note, i.e. it
+  // would surface in every project on this machine. Skip it like any other bad record.
+  if (isUnsafeProjectPath(rec.project_path)) return 'skipped';
 
   const db = getDb();
   const row = {
     id: rec.id,
-    content: String(rec.content ?? '').slice(0, MAX_CONTENT_LENGTH),
+    // Redacted like every other write path. Tags on the next lines already were; content was not,
+    // which meant a hand-edited sync file, a peer on an older build, or pre-fix history re-imported
+    // raw secrets into the local plaintext store — and every export afterwards re-published them.
+    content: redactSecrets(String(rec.content ?? '').slice(0, MAX_CONTENT_LENGTH)).text,
     category: rec.category,
     importance: rec.importance,
     project_path: normalizeProjectPath(rec.project_path),
-    project_key: rec.project_key ?? deriveProjectKey(rec.project_path),
+    // Derive the key from the NORMALIZED path, as createSticky does. Using the raw value let a
+    // synced record carry a key that disagreed with the path stored beside it.
+    project_key: rec.project_key ?? deriveProjectKey(normalizeProjectPath(rec.project_path)),
     tags: JSON.stringify(
       (Array.isArray(rec.tags) ? rec.tags.slice(0, MAX_TAGS) : []).map((t) => redactSecrets(String(t)).text)
     ),
@@ -382,11 +431,16 @@ export function dismissSticky(id, reason = null) {
     return { ok: false, error: `sticky ${id} is already dismissed`, sticky: rowToSticky(existing) };
   }
 
+  // Redacted, and length-capped, like content. A dismiss reason is free text written by the model
+  // or the user ("fixed — rotated the old sk-ant-… key"), it is stored in the same plaintext
+  // database, and it IS carried by exportAllRows into the sync document that git-sync commits and
+  // pushes. It was the one write path that skipped the redactor entirely.
+  const safeReason = reason ? redactSecrets(String(reason).slice(0, MAX_CONTENT_LENGTH)).text : null;
   db.prepare(
     `UPDATE stickies
         SET status = 'dismissed', dismiss_reason = @reason, updated_at = @now
       WHERE id = @id`
-  ).run({ id, reason: reason || null, now: nowIso() });
+  ).run({ id, reason: safeReason || null, now: nowIso() });
 
   return { ok: true, sticky: getSticky(id) };
 }

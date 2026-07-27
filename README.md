@@ -255,6 +255,11 @@ Cloud sessions write to their own branch; the bundled Action merges each note in
 (union + dismiss-wins + dedupe) — one converged board per repo, hands-off. Same `!!sticky` grammar
 and same redaction as the local plugin.
 
+Two things worth knowing before you run it: your notes live **in that repo**, so they are as
+public as it is; and if a step can't be done safely — an unparseable `.claude/settings.json`,
+most often an unresolved merge conflict — that file is left alone and the command warns and
+exits non-zero rather than replacing it.
+
 ---
 
 ## The sticky model
@@ -328,7 +333,7 @@ claude plugin install stickies@stickies --scope user     # restart Claude Code a
 # work on it:
 git clone https://github.com/dumbspacecookie/stickies
 cd stickies
-npm test        # 23 suites, no network
+npm test        # 27 suites, 558 assertions, no network
 ```
 
 Install once at user scope and it's in every project; per-project scoping is by `project_path` on

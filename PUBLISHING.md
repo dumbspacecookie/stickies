@@ -15,8 +15,13 @@ The registry only stores metadata — the package itself lives on npm.
 ```powershell
 cd path\to\stickies            # your local clone of this repo
 npm login                      # once, opens browser
-npm publish --access public    # publishes stickies-mcp@0.9.0
+npm publish --access public    # publishes stickies-mcp at the version in package.json
 ```
+
+**Token gotcha.** If your npm 2FA is a passkey rather than a TOTP app, a classic **publish**
+token still fails with `EOTP` — npm asks for a one-time code your authenticator cannot produce.
+Use a **granular** token with 2FA bypass, or a classic **automation** token. Revoke it once the
+publish is done.
 
 Verify: <https://www.npmjs.com/package/stickies-mcp>. The published `package.json` must contain
 `"mcpName": "io.github.dumbspacecookie/stickies"` — it does; that's what the registry checks.
@@ -43,9 +48,16 @@ This grants publish rights to the `io.github.dumbspacecookie/*` namespace.
 ## 4. Validate, then publish
 
 ```powershell
-.\mcp-publisher.exe publish --dry-run    # validates server.json + npm match, no write
-.\mcp-publisher.exe publish              # the real thing
+.\mcp-publisher.exe validate    # checks server.json without publishing
+.\mcp-publisher.exe publish     # the real thing
 ```
+
+`validate` is the pre-flight. There is **no** `publish --dry-run` — the subcommands are
+`init`, `login`, `logout`, `publish`, `status`, `validate`, and `publish` takes an optional
+server-file path, not a dry-run flag. (An earlier version of this file said otherwise, which
+meant the "safe" pre-flight step would simply have errored out.)
+
+`.\mcp-publisher.exe status` reports what the registry currently holds for the server.
 
 Verify it's live:
 
@@ -55,9 +67,25 @@ curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.dum
 
 ## Re-publishing a new version
 
-Bump the version in **three** places, then repeat steps 1 + 4:
-`package.json` (`version`), `.claude-plugin/plugin.json` (`version`), and `server.json`
-(both the top-level `version` and `packages[0].version`). All must match.
+Bump the version in **three files / four strings**, then repeat steps 1 + 4:
+
+| File | Field(s) |
+|------|----------|
+| `package.json` | `version` |
+| `.claude-plugin/plugin.json` | `version` |
+| `server.json` | `version` **and** `packages[0].version` |
+
+All four must match, or the registry rejects the publish. Nothing else needs touching:
+`stickies --version` and the MCP server's advertised version both read `package.json` at
+runtime, so they cannot drift (they used to be hardcoded, and reported `0.7.0` for four
+releases).
+
+Pre-flight before either publish, both real commands worth running:
+
+```powershell
+npm test                    # the whole suite
+npm pack --dry-run          # exactly which files would ship
+```
 
 ## Notes
 

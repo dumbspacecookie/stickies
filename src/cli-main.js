@@ -5,6 +5,7 @@
 // node:sqlite warning suppressor — so this module's node:sqlite load stays quiet.
 import { Command } from 'commander';
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createSticky, readStickies, dismissSticky } from './store.js';
@@ -21,12 +22,16 @@ function autoSyncAfterMutation() {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+// Read from package.json so `stickies --version` cannot drift from what was published. It was
+// hardcoded at 0.7.0 across four releases, so every version a user reported back was wrong.
+const { version: PKG_VERSION } = JSON.parse(readFileSync(join(HERE, '..', 'package.json'), 'utf8'));
+
 const program = new Command();
 
 program
   .name('stickies')
   .description('Persistent sticky notes for Claude Code (local SQLite, opt-in git sync).')
-  .version('0.7.0');
+  .version(PKG_VERSION);
 
 function formatSticky(s) {
   const scope = s.project_path ? '' : ' (global)';
@@ -305,9 +310,13 @@ program
   .argument('[path]', 'Target repo directory (defaults to cwd).', '.')
   .action(async (path) => {
     const { installRepoMode } = await import('./repo-mode/install.js');
-    const { root, steps } = installRepoMode(path);
+    const { root, steps, warnings = [] } = installRepoMode(path);
     console.log(`Installed stickies repo-mode into ${root}:`);
     for (const s of steps) console.log(`  + ${s}`);
+    // On stderr and with a non-zero exit: a skipped step must not read as a successful install,
+    // or the user discovers weeks later that nothing was ever captured.
+    for (const w of warnings) console.error(`  ! ${w}`);
+    if (warnings.length) process.exitCode = 1;
     console.log(
       '\nCommit the .stickies/ and .claude/settings.json files. In any session on this\n' +
         'repo, Claude captures `!!sticky …` lines into .stickies/notes.json and shows them\n' +

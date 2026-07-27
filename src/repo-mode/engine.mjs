@@ -44,7 +44,7 @@ function saveStore(store) {
 // ---- secret redaction (inlined from src/redact.js) -------------------------
 const CONNECTION_URI = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]*:[^\s@/]+@/gi;
 const TOKEN_PATTERNS = [
-  /-----BEGIN[^-]*PRIVATE KEY-----[\s\S]*?-----END[^-]*PRIVATE KEY-----/g,
+  /-----BEGIN[^-]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END[^-]*PRIVATE KEY(?: BLOCK)?-----/g,
   /sk-(?:ant-)?[A-Za-z0-9_-]{16,}/g,
   /(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}/g,
   /AKIA[0-9A-Z]{16}/g,
@@ -58,6 +58,7 @@ const TOKEN_PATTERNS = [
   /https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/[0-9]+\/[A-Za-z0-9_-]+/g,
   /AIza[0-9A-Za-z_-]{35}/g,
   /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+  /-----BEGIN[^-]*PRIVATE KEY(?: BLOCK)?-----[^\S\n]*(?:\r?\n[A-Za-z0-9+/=]{16,}[^\S\n]*)+/g,
 ];
 const SENSITIVE =
   'password|passwd|passphrase|pwd|secret|token|apikey|api[_-]?key|access[_-]?key|' +
@@ -173,8 +174,13 @@ function git(args) {
 function autocommit(n) {
   if (/^(0|false|no|off)$/i.test(process.env.STICKIES_REPO_AUTOCOMMIT || '')) return 'autocommit off';
   git(['add', '.stickies/notes.json', '.stickies/NOTES.md']);
+  // The pathspec is the whole point. `git commit` with none commits everything ALREADY STAGED,
+  // not just what the line above staged — so a developer who had run `git add .env.local` to
+  // review it, and then let one !!sticky line be captured, had that file committed and PUSHED by
+  // a hook they see no output from. Naming the two files makes the commit exactly what it claims.
   const c = git(['-c', 'user.email=stickies@repo.local', '-c', 'user.name=stickies',
-    'commit', '-m', `stickies: capture ${n} note(s)`]);
+    'commit', '-m', `stickies: capture ${n} note(s)`,
+    '--', '.stickies/notes.json', '.stickies/NOTES.md']);
   if (!c.ok) return `commit skipped (${c.out.split('\n')[0] || 'nothing to commit'})`;
   const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']).out || 'HEAD';
   const p = git(['push', 'origin', `HEAD:${branch}`]);

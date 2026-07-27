@@ -17,7 +17,10 @@ const CONNECTION_URI = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]*:[^\s@/]+@/gi;
 
 // 2. Known token shapes — the whole match is a secret, replaced wholesale.
 const TOKEN_PATTERNS = [
-  /-----BEGIN[^-]*PRIVATE KEY-----[\s\S]*?-----END[^-]*PRIVATE KEY-----/g, // PEM private key blocks
+  // PEM private key blocks. `(?: BLOCK)?` because a PGP block is
+  // `-----BEGIN PGP PRIVATE KEY BLOCK-----`, which the bare form cannot match — so PGP keys, the
+  // ones people most often paste whole, were stored verbatim.
+  /-----BEGIN[^-]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END[^-]*PRIVATE KEY(?: BLOCK)?-----/g,
   /sk-(?:ant-)?[A-Za-z0-9_-]{16,}/g,               // Anthropic / OpenAI (hyphen style)
   /(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}/g,  // Stripe (underscore style)
   /AKIA[0-9A-Z]{16}/g,                             // AWS access key id
@@ -28,8 +31,25 @@ const TOKEN_PATTERNS = [
   /SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g,   // SendGrid
   /xox[baprs]-[A-Za-z0-9-]{10,}/g,                 // Slack token
   /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]+/g, // Slack incoming-webhook URL
+  // Discord incoming-webhook URL. Anyone holding one can post into that channel as you. This is
+  // the credential a Stickies user is MOST likely to paste into a note, because Stickies itself
+  // asks for one (STICKIES_DISCORD_WEBHOOK) — "webhook for the team channel is https://…" is a
+  // note somebody writes while setting the tool up. repo-mode's inlined copy of this file had it;
+  // the copy every other path uses did not, so the main path stored and synced it in plaintext.
+  /https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/[0-9]+\/[A-Za-z0-9_-]+/g,
   /AIza[0-9A-Za-z_-]{35}/g,                        // Google API key
   /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, // JWT
+  // An UNPAIRED private-key header, which the complete-block pattern above cannot see: a paste
+  // that lost its footer is still a private key.
+  //
+  // It must be followed by at least one line of actual key material. The first version of this
+  // ran to the end of the string on the header ALONE, which meant a note that merely MENTIONED a
+  // header — "the deploy key starts with -----BEGIN OPENSSH PRIVATE KEY----- and ends with the
+  // matching END line; ask Dana for access" — had everything after the header silently deleted.
+  // Redaction happens at write time, so that loss was permanent, and on the auto-capture path
+  // the user was not even told. Requiring a base64-looking line keeps the leak closed and stops
+  // the tool eating prose about key formats, which is a thing people write.
+  /-----BEGIN[^-]*PRIVATE KEY(?: BLOCK)?-----[^\S\n]*(?:\r?\n[A-Za-z0-9+/=]{16,}[^\S\n]*)+/g,
 ];
 
 // 3. "key = value" / "key: value" assignments, covering SCREAMING_SNAKE env-var names,

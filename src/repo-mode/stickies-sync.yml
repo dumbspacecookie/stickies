@@ -26,12 +26,28 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      - name: Merge notes from ${{ github.ref_name }} into main
+          # The job pushes with an explicit token below; it does not need the checkout action to
+          # leave credentials in .git/config where any later step — or anything this job runs —
+          # could read them.
+          persist-credentials: false
+      - name: Merge notes from the triggering branch into main
+        env:
+          # A branch name reaches this job as attacker-controlled text: `git check-ref-format`
+          # accepts `claude/x$(id)y`, and `${{ }}` is substituted into the script BEFORE bash
+          # parses it — so interpolating it inline was arbitrary command execution on the runner,
+          # holding a token with `contents: write`. Through env it is data: bash expands "$REF"
+          # after parsing, and never re-parses the result.
+          REF: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
+          set -euo pipefail
+          # Defence in depth: even as data, refuse a ref that is not a plain branch name.
+          case "$REF" in
+            *[!A-Za-z0-9._/-]*) echo "refusing unusual branch name"; exit 1 ;;
+          esac
           # The triggering branch isn't reachable from main — fetch it, then read its store.
-          git fetch --no-tags origin "${{ github.ref_name }}"
-          git show "origin/${{ github.ref_name }}:.stickies/notes.json" > /tmp/incoming.json 2>/dev/null || { echo "no notes on branch"; exit 0; }
+          git fetch --no-tags origin "$REF"
+          git show "origin/$REF:.stickies/notes.json" > /tmp/incoming.json 2>/dev/null || { echo "no notes on branch"; exit 0; }
           node .stickies/engine.mjs reconcile /tmp/incoming.json
           if git diff --quiet -- .stickies/; then
             echo "no change after reconcile"; exit 0
@@ -39,5 +55,6 @@ jobs:
           git config user.name  "stickies-bot"
           git config user.email "stickies@users.noreply.github.com"
           git add .stickies/
-          git commit -m "stickies: reconcile notes from ${{ github.ref_name }}"
-          git push origin HEAD:main
+          # -F - : the branch name goes in on stdin, so it is never part of a command line.
+          printf 'stickies: reconcile notes from %s\n' "$REF" | git commit -F -
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main

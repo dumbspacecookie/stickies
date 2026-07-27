@@ -55,12 +55,26 @@ and `/btw` is the one you'll reach for 90% of the time.
 ### Review — `/stickies`
 
 ```
-/stickies            # this project's notes + globals, with ids
-/stickies all        # every project at once
-/stickies p1         # just the P1s — the action list
-/stickies global     # just the globals
-/stickies dashboard  # the web UI
+/stickies                  # this project's notes + globals, with ids
+/stickies all              # every project at once
+/stickies dashboard        # the web UI
+/stickies dismiss <id>     # mark one done
+/stickies add <text>       # write one by hand
+/stickies sync             # pull/merge/push through your own git repo
 ```
+
+That is the whole set — the slash command takes nothing else. For anything narrower, use the
+CLI, which is where the flags live:
+
+```sh
+stickies list --min-importance P1   # just the P1s: the action list
+stickies list --all                 # every project, plus globals
+stickies list --project <path>      # a project you are not standing in
+stickies list --limit 20            # cap the output
+```
+
+There is deliberately no globals-only or category filter; the dashboard is the place to slice
+notes that finely.
 
 **This is the part everyone misses.** What Claude sees at session start is a *digest*, not
 the list — P3 notes collapse to a bare count like "2 stickys", with no ids and nothing to act
@@ -250,5 +264,11 @@ claude plugin update stickies@stickies-local
 
 Then **restart Claude Code** — hooks and MCP servers are only read at startup.
 
-**"Did the hooks even fire?"** `node src/cli.js status`, or check for the managed block
-between `<!-- stickies:start -->` markers in the project's `CLAUDE.md`.
+**"Did the hooks even fire?"** Run `stickies status` (or `node src/cli.js status`).
+
+Do **not** go looking in `CLAUDE.md` — an older version of this doc told you to check for a
+managed block between `<!-- stickies:start -->` markers there, and that advice is now exactly
+backwards. The digest is delivered through the hook's `additionalContext` channel and is never
+written to a file; the SessionStart hook *removes* any leftover managed block from a previous
+version. Finding nothing in `CLAUDE.md` is the healthy state, so its absence tells you nothing
+about whether the hooks ran.

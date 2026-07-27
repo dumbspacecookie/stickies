@@ -10,19 +10,37 @@ or publishing it.
 
 - **Single local user.** All stickies for all projects live in one DB
   (`$STICKIES_DB` or `~/.stickies/stickies.db`) with normal user file permissions.
-- **No authentication / no network** in phase 1. Nothing is exposed off-host.
+- **No authentication.** Anything running as your user can read the store, and can reach the
+  dashboard's loopback API for as long as you have a dashboard running.
+- **Network is opt-in — but it is not "none".** Three paths can carry note content off this
+  machine, all off by default. See [Egress](#egress) for exactly what leaves and when.
 - A note written in one project (or synced from another machine) is **untrusted input**
   to every later session that reads it.
+
+## Egress
+
+A default install does not talk to the network. These are the three ways that changes, so you
+can decide which you have turned on:
+
+| Path | Turned on by | What leaves |
+|------|--------------|-------------|
+| **Discord webhook** (`src/notify.js`) | `STICKIES_DISCORD_WEBHOOK` set to a Discord webhook URL | Note content — including full note bodies for `stickies notify [--all]`. Only a real `discord.com/api/webhooks/…` URL is accepted, so a typo'd or hostile value is refused rather than posted to. Content has been through `redactSecrets()` first. |
+| **Git sync** (`src/git-sync.js`, `src/sync.js`) | **both** `STICKIES_AUTO_SYNC` truthy **and** `STICKIES_SYNC_REPO` set | A plaintext JSON document of **all** your notes, committed and pushed to whatever remote that repo has. SessionStart pulls, the Stop hook pushes on turns that captured something. Use a **private** repo. |
+| **Repo-mode** (`stickies init-repo`) | Running the command in a repo, then committing what it wrote | Notes are committed into `.stickies/notes.json` **in that repo** and pushed with it — so they inherit that repo's visibility. Public repo means public notes. It also installs a GitHub Actions workflow that runs on pushes to `claude/**` and `stickies/**`. |
+
+Auto-sync is best-effort: failures are swallowed so a broken remote cannot break your session —
+which also means a push can fail without you noticing. Nothing here reports telemetry, phones
+home, or contacts any endpoint the author controls; every destination is one you configured.
 
 ## Defended (verified by `test/redteam.mjs`)
 
 | Vector | Defense |
 |--------|---------|
 | **SQL injection** (content, tags, dismiss id) | All queries are parameterized; no user input is concatenated into SQL. |
-| **Context/CLAUDE.md injection** | The SessionStart digest is delivered via the hook's `additionalContext` channel — it is **not written to disk**. Note text is still escaped (`<!--`/`-->` neutralized) so a note can't forge the managed-section markers used by the one-time legacy-file cleanup, and any pre-existing user content in `<cwd>/CLAUDE.md` is always preserved. |
+| **Context/CLAUDE.md injection** | The SessionStart digest is delivered via the hook's `additionalContext` channel — the digest text itself is never written to a file. Note text is still escaped (`<!--`/`-->` neutralized) so a note can't forge the managed-section markers used by the one-time legacy-file cleanup, and any pre-existing user content in `<cwd>/CLAUDE.md` is always preserved. |
 | **Oversized input / DoS surface** | content ≤ 500 chars; tags ≤ 20, each ≤ 40 chars; read `limit` ≤ 500. |
-| **Secret capture at rest** | Content **and tags** are scrubbed on write (`src/redact.js`): PEM private keys; AWS/GitHub/Slack/Google/OpenAI/Anthropic/Stripe/npm/SendGrid/DigitalOcean token shapes and JWTs; `scheme://user:pass@host` connection strings; and labelled `KEY=<value>` / `"key":"<value>"` assignments (including `SCREAMING_SNAKE` env-var names) are replaced with `[REDACTED]`; the write tool/CLI warn when this happens. Best-effort, not a vault — an unlabelled high-entropy token with no known shape can still pass. |
-| **Arbitrary file write** | To deliver the digest the SessionStart hook writes **nothing to disk** — it returns `additionalContext`. The only disk write it can perform is a one-time removal of a legacy managed section from `<cwd>/CLAUDE.md` (it never creates the file). A sticky's `project_path` is a **filter only** — never a write target. |
+| **Secret capture at rest** | Content **and tags** are scrubbed on write (`src/redact.js`): PEM private key blocks, including PGP (`…PRIVATE KEY BLOCK-----`) and a header that lost its footer; AWS/GitHub/Slack/Google/OpenAI/Anthropic/Stripe/npm/SendGrid/DigitalOcean token shapes and JWTs; Slack **and Discord** incoming-webhook URLs — the latter matters because Stickies itself asks you for one; `scheme://user:pass@host` connection strings; and labelled `KEY=<value>` / `"key":"<value>"` assignments (including `SCREAMING_SNAKE` env-var names) are replaced with `[REDACTED]`; the write tool/CLI warn when this happens. The redactor is duplicated in `src/repo-mode/engine.mjs`, which has to be self-contained — `test/redaction-parity-test.mjs` runs one corpus through both copies and fails if their output differs, because the Discord gap was found by the two copies disagreeing. Best-effort, not a vault — an unlabelled high-entropy token with no known shape can still pass. |
+| **Arbitrary file write** | A sticky's `project_path` is a **filter only** — it is never used as a write target. The SessionStart hook does write, to exactly two places: a session marker at `$STICKIES_HOME/sessions/<id>.json` (so SessionEnd can report what changed during the session; the id is sanitized so it cannot escape that directory), and a one-time removal of a legacy managed section from `<cwd>/CLAUDE.md` — it never creates that file, and if it cannot find a well-formed section it leaves the file alone. Separately, `stickies init-repo` writes into a repo you point it at; see [Repo-mode](#repo-mode-stickies-init-repo). |
 | **Native-dependency supply chain** | Zero native modules. Storage uses Node's built-in `node:sqlite`; runtime deps are only `@modelcontextprotocol/sdk`, `commander`, `zod`. |
 
 ## Phase 2 surfaces (auto-capture hook + dashboard)
@@ -32,12 +50,51 @@ or publishing it.
 | **Post-turn Stop hook** (`src/auto-capture.js`) | Parses `!!sticky …` directives from the just-finished assistant turn and persists them. Directive content flows through the same `createSticky` path → secret redaction + size/tag bounds apply; writes are deduped and scoped to `cwd`; storing a note is not code execution. The hook is non-blocking and never emits a `block` decision, so it can't cause a stop loop. It trusts `transcript_path`/`cwd` from the (local, Claude-Code-issued) hook event. |
 | **Local web dashboard** (`src/dashboard.js`) | Binds **127.0.0.1 only**. Mutations (`/api/dismiss`, `/api/create`) require a per-launch random token **and** a same-origin/no `Origin` check → a drive-by website cannot dismiss or create stickies (CSRF-defended; verified in `test/dashboard-test.mjs`). The page renders note bodies via `textContent`, never `innerHTML`, so a sticky can't inject script into the dashboard. No external assets/CDN. Read endpoints aren't token-gated, but cross-origin pages can't read responses (no CORS headers granted). |
 
-Dashboard residual: any local process running as you can reach the loopback API while the
-dashboard is running (single-user assumption). Stop it when not in use; it does not
-auto-start.
-
 | **Auto-sync** (`maybeAutoSync` in `src/git-sync.js`) | Doubly gated: runs only when **both** `$STICKIES_AUTO_SYNC` is truthy **and** `$STICKIES_SYNC_REPO` is set. When on, the SessionStart hook pulls and the Stop hook pushes (only on turns that captured a new sticky). Best-effort: any failure is swallowed so it can't break a session. Off by default — no automatic git/network activity unless you opt in. |
-| **Git sync** (`src/git-sync.js`, `src/sync.js`) | Opt-in and off by default — does nothing unless `$STICKIES_SYNC_REPO` points at a git working copy you own. All git calls use argument arrays (never a shell string), so repo paths/commit messages can't inject shell commands. Pull/push only happen if the repo has a remote you configured; with no remote it's purely local. **The exported sync document is plaintext JSON** containing all note bodies — store it in a **private** repo. Secret redaction still applies on write, but treat the repo as containing your notes. Merge is last-writer-wins by `updated_at`; a malicious/edited sync file can only add/replace stickies (data), not execute code, and bad records are skipped. |
+| **Git sync** (`src/git-sync.js`, `src/sync.js`) | Opt-in and off by default — does nothing unless `$STICKIES_SYNC_REPO` points at a git working copy you own. All git calls use argument arrays (never a shell string), so repo paths/commit messages can't inject shell commands. Pull/push only happen if the repo has a remote you configured; with no remote it's purely local. **The exported sync document is plaintext JSON** containing all note bodies — store it in a **private** repo. Secret redaction still applies on write, but treat the repo as containing your notes. Merge is last-writer-wins by `updated_at`; a malicious/edited sync file can only add/replace stickies (data), not execute code, and bad records are skipped. Records arriving from a sync document are redacted on import as well as on write, so a hand-edited or older-build document cannot re-import raw secrets into the local store. |
+
+Dashboard residual: any local process running as you can reach the loopback API while the
+dashboard is running (single-user assumption). Stop it when not in use. It does not auto-start —
+a dashboard runs only for as long as you have one running.
+
+## Repo-mode (`stickies init-repo`)
+
+This is the highest-consequence command in the package: it is the only one that writes into a
+repository you name, and the only one that installs something which later runs on GitHub's
+infrastructure with a write token. Run it deliberately, and read the diff before committing.
+
+**What it writes** (each step is reported; a step it cannot do safely is reported as a warning
+and the command exits non-zero, so a partial install never looks like a successful one):
+
+- `.stickies/` — `notes.json` (the committed note store) and a self-contained `engine.mjs`.
+- `NOTES.md` — generated from the store, so notes are readable in the GitHub UI.
+- `CLAUDE.md` — a managed block, delimited by `stickies:repo-start` / `stickies:repo-end`
+  markers that must stand alone at the start of their line. Marker handling is deliberately
+  strict: a malformed or orphaned marker causes the block to be **appended** rather than
+  letting a replacement span swallow the text between two unrelated markers.
+- `.claude/settings.json` — two hook entries. If that file exists but cannot be parsed or is
+  not an object, it is **left untouched** and the step is reported as a warning; it is never
+  replaced with a fresh file, because the likeliest reason it will not parse is an unresolved
+  merge conflict, and a repo-shared settings file carries other people's hooks and permissions.
+- `.github/workflows/stickies-sync.yml` — the reconciliation workflow.
+
+Every write target is resolved with `realpathSync` and checked to still be inside the repo
+root before it is written, so a symlink or junction planted at `.claude`, `.github`, or
+`.stickies` cannot redirect a write outside the repo.
+
+**The workflow.** It triggers on pushes to `claude/**` and `stickies/**` that touch
+`.stickies/notes.json`, and holds `contents: write`. A branch name is attacker-controlled text
+(`git check-ref-format` accepts `claude/x$(id)y`), so it is passed to the script through `env:`
+and expanded as `"$REF"` after bash has parsed the script — never interpolated into the script
+body, which would have been command execution on the runner. It additionally refuses a ref
+containing anything outside `[A-Za-z0-9._/-]`, passes the commit message on stdin rather than
+on a command line, and sets `persist-credentials: false` so the checkout does not leave a token
+in `.git/config`. It only ever touches `.stickies/`.
+
+**Auto-commit.** In a repo-mode session, captured notes are committed automatically. The commit
+is restricted to a pathspec covering only the note files, so anything else you happen to have
+staged is not swept into it. Set `STICKIES_REPO_AUTOCOMMIT=0` to turn the commit off and stage
+notes yourself.
 
 ## Resilience (storage / real-store paths)
 
@@ -53,7 +110,7 @@ Verified by `test/resilience-test.mjs` and `test/migration-test.mjs`:
   a fresh one is created so the tool keeps working; the bad file is preserved for recovery.
 - **Corrupt row data** — a bad `tags` value degrades to `[]` instead of breaking the whole read.
 
-## Residual risks (by design or accepted in phase 1)
+## Residual risks (by design, or accepted)
 
 1. **Prompt injection is inherent to the feature.** Note bodies are injected into context.
    Mitigations: the digest is prefixed with a "treat as data, not instructions" banner, and
@@ -69,13 +126,19 @@ Verified by `test/resilience-test.mjs` and `test/migration-test.mjs`:
 4. **`/stickies add` shell construction.** The slash command has the model build a
    `node cli.js add "<text>"` invocation (restricted to `Bash(node:*)`). Avoid passing
    untrusted text through it; prefer the `stickies_write` MCP tool for programmatic writes.
+5. **Notes in a repo are as public as the repo.** Repo-mode commits your notes into the
+   repository itself. That is the feature — it is how a note written on a phone reaches your
+   desktop — but it means the visibility of your notes is the visibility of that repo, decided
+   once when you run `init-repo` and easy to forget afterwards.
 
 ## Before publishing to a registry
 
-- `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, and `package.json` contain
-  an **author email**. Replace with a noreply/handle if you don't want it public.
+- Manifests carry a handle (`dumbspacecookie`), not an email address. If you fork this, check
+  `package.json` and `.claude-plugin/plugin.json` before publishing under your own name.
 - Repo scanned: no secrets, no hardcoded user paths in shipped files (configs use
   `${CLAUDE_PLUGIN_ROOT}`).
+- Bump the version in `package.json`, `.claude-plugin/plugin.json`, and `server.json` (in two
+  places) together — see PUBLISHING.md.
 - `test/` is bundled in the plugin copy; harmless but can be excluded to slim the package.
 
 Run the checks any time:
