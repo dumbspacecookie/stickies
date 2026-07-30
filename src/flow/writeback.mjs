@@ -395,6 +395,37 @@ export function setPhaseStatus(projectPath, phaseId, column, { stamp = null } = 
     return { ok: false, reason: 'this project has no .planning/ROADMAP.md to write to' };
   }
 
+  // Confine the target to the project.
+  //
+  // The backup directory below has been resolved and contained since it was written, and the temp
+  // file is opened 'wx' so a planted `ROADMAP.md.<hex>.tmp` cannot be followed — but the file we
+  // actually edit was never checked. A `.planning` directory (or the ROADMAP.md inside it) that is
+  // a symlink or a Windows junction pointing elsewhere therefore made one card drag rewrite a
+  // `**Status:**` line in a file outside the project. Reproduced on Windows with an unprivileged
+  // junction: the victim file changed, while the backup landed inside the project — so the code
+  // knew where the root was and simply never compared.
+  //
+  // A repository can ship that link, and writeback is reachable on any project in the dashboard's
+  // allowlist. Opting into writeback is consent to edit THIS project's roadmap, not an arbitrary
+  // file the current user happens to be able to write.
+  //
+  // Both sides are resolved so a legitimately symlinked project root still works, and containment
+  // (not equality) so a `.planning` that links elsewhere INSIDE the project is still allowed.
+  let realRoadmap;
+  try {
+    const realProject = realpathSync(projectPath);
+    realRoadmap = realpathSync(roadmap);
+    if (realRoadmap !== realProject && !realRoadmap.startsWith(realProject + sep)) {
+      return {
+        ok: false,
+        reason: 'refusing to write: .planning/ROADMAP.md resolves outside this project',
+        resolved: realRoadmap,
+      };
+    }
+  } catch (err) {
+    return { ok: false, reason: `cannot resolve ROADMAP.md: ${err?.message || err}` };
+  }
+
   let original;
   try { original = readFileSync(roadmap, 'utf8'); }
   catch (err) { return { ok: false, reason: `cannot read ROADMAP.md: ${err?.message || err}` }; }

@@ -460,6 +460,33 @@ check(kept.length <= 10, `backups are capped at 10 (got ${kept.length})`);
 check(setPhaseStatus(join(ROOT, 'nope'), 'phase-1', 'done').ok === false, 'a project with no ROADMAP.md is refused');
 check(/no \.planning/.test(setPhaseStatus(join(ROOT, 'nope'), 'phase-1', 'done').reason), 'and says why');
 
+// The same trick as the `.flow` case above, aimed at the file writeback actually EDITS.
+//
+// `.flow` was resolved and contained; `.planning` was not — so a repo shipping `.planning` as a
+// symlink/junction had one card drag rewrite a `**Status:**` line in a file outside the project.
+// Found by attacking a live dashboard, not by reading: the victim file changed while the backup
+// landed inside the project, which is exactly what "it knew the root and never compared" looks
+// like.
+const escProj = join(ROOT, 'escape-proj');
+const escTarget = join(ROOT, 'escape-target');
+mkdirSync(join(escTarget, '.planning'), { recursive: true });
+mkdirSync(escProj, { recursive: true });
+const victim = join(escTarget, '.planning', 'ROADMAP.md');
+const VICTIM_BEFORE = '### Phase 1: Victim\n**Status:** Planned\n\n- [ ] x\n';
+writeFileSync(victim, VICTIM_BEFORE);
+let planningLinked = false;
+try { symlinkSync(join(escTarget, '.planning'), join(escProj, '.planning'), 'junction'); planningLinked = true; }
+catch { /* no privilege to link — skip rather than fake a pass */ }
+if (planningLinked) {
+  const esc = setPhaseStatus(escProj, 'phase-1', 'doing', { stamp: 'ESC' });
+  check(esc.ok === false, 'a .planning that resolves outside the project is refused');
+  check(/outside this project/.test(esc.reason || ''), 'and says so plainly');
+  check(readFileSync(victim, 'utf8') === VICTIM_BEFORE,
+    'and the file outside the project is byte-identical afterwards');
+} else {
+  console.log('  SKIP  .planning junction escape (no symlink privilege on this machine)');
+}
+
 console.log(fail ? `\nwriteback: ${fail} FAILED` : '\nwriteback: all passed');
 try { rmSync(ROOT, { recursive: true, force: true }); } catch {}
 process.exit(fail ? 1 : 0);
