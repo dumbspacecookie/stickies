@@ -9,7 +9,27 @@ import { relativeTime } from './relative-time.mjs';
 import { themeStyle, themeBoot, themeToggleButton } from './theme.mjs';
 import { switcherStyle, switcherButton, switcherBoot } from './project-switcher.mjs';
 
-export function renderBoardPage({ project, writeback = false, token = null }) {
+// Extra header links, supplied by the server rather than hardcoded here.
+//
+// This exists so an optional module can add itself to the navigation without its name appearing
+// in this file. The dev tree has a feature the published package does not, and these renderers
+// are ported wholesale — a hardcoded link would either ship a 404 to strangers or force a
+// hand-merge on every release. The server knows what it loaded; this file does not need to.
+//
+// Rendered with escaped text, since it is markup either way and a label should never be able to
+// close the tag it sits in.
+function extraNavLinks(extraNav) {
+  return (Array.isArray(extraNav) ? extraNav : [])
+    .filter((l) => l && typeof l.href === 'string' && typeof l.label === 'string')
+    .map((l) => `<a class="nav" href="${esc(l.href)}">${esc(l.label)}</a>`)
+    .join(' ');
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+export function renderBoardPage({ project, writeback = false, token = null, extraNav = [] }) {
   const proj = String(project || '(global)');
   return `<!doctype html>
 <html lang="en">
@@ -203,6 +223,7 @@ ${switcherBoot(proj)}
     <button id="tSwimlanes" type="button">Swimlanes</button>
   </div>
   ${themeToggleButton()}
+  ${extraNavLinks(extraNav)}
   <a class="nav" href="/command">🛰 Command</a>
   <a class="nav" href="/graph">🕸 Graph →</a>
   <a class="nav" href="/">🟡 Stickies →</a>

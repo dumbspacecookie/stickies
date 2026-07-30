@@ -10,7 +10,23 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-export function renderPage({ token, project, categories, importances }) {
+// Extra header links, supplied by the server rather than hardcoded here.
+//
+// This exists so an optional module can add itself to the navigation without its name appearing
+// in this file. The dev tree has a feature the published package does not, and these renderers
+// are ported wholesale — a hardcoded link would either ship a 404 to strangers or force a
+// hand-merge on every release. The server knows what it loaded; this file does not need to.
+//
+// Rendered with escaped text, since it is markup either way and a label should never be able to
+// close the tag it sits in.
+function extraNavLinks(extraNav) {
+  return (Array.isArray(extraNav) ? extraNav : [])
+    .filter((l) => l && typeof l.href === 'string' && typeof l.label === 'string')
+    .map((l) => `<a class="nav" href="${escapeHtml(l.href)}">${escapeHtml(l.label)}</a>`)
+    .join(' ');
+}
+
+export function renderPage({ token, project, categories, importances, extraNav = [] }) {
   const catOptions = categories.map((c) => `<option value="${c}">${c}</option>`).join('');
   const impOptions = importances.map((i) => `<option value="${i}"${i === 'P2' ? ' selected' : ''}>${i}</option>`).join('');
 
@@ -132,6 +148,7 @@ ${switcherBoot(project || '(global)')}
   </div>
   <input class="filter" id="search" type="text" placeholder="Search notes…" aria-label="Search notes by text or tag" autocomplete="off" spellcheck="false" />
   ${themeToggleButton()}
+  ${extraNavLinks(extraNav)}
   <a class="nav" href="/command">🛰 Command</a>
   <a class="nav" href="/board">📋 Flow Board →</a>
 </header>

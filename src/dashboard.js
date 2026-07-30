@@ -41,6 +41,10 @@ try {
   /* not this build */
 }
 
+// Navigation contributed by whatever optional modules this build actually has. Empty in the
+// published package, so the shared renderers stay byte-identical between the trees.
+const EXTRA_NAV = APPRENTICE ? [{ href: '/apprentice', label: '🧭 Apprentice' }] : [];
+
 // Board writeback edits a project's .planning/ROADMAP.md, so it is opt-in: a dashboard should
 // not gain the power to rewrite planning documents just by being open. The board page asks this
 // too, and hides its drag affordances when it is off, so the feature is never a dead gesture.
@@ -313,7 +317,7 @@ async function handle(req, res) {
     const scope = scopeOf(url, res, { html: true });
     if (scope === null) return;
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-    res.end(renderPage({ token: TOKEN, project: scope, categories: CATEGORIES, importances: IMPORTANCES }));
+    res.end(renderPage({ token: TOKEN, project: scope, categories: CATEGORIES, importances: IMPORTANCES, extraNav: EXTRA_NAV }));
     return;
   }
 
@@ -324,7 +328,7 @@ async function handle(req, res) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     // The board only needs a mutation token when writeback is on — no point handing a page
     // credentials for a capability it isn't allowed to use.
-    res.end(renderBoardPage({ project: scope, writeback: writebackEnabled(), token: writebackEnabled() ? TOKEN : null }));
+    res.end(renderBoardPage({ project: scope, writeback: writebackEnabled(), token: writebackEnabled() ? TOKEN : null, extraNav: EXTRA_NAV }));
     return;
   }
 
