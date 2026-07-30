@@ -76,10 +76,13 @@ path into your planning documents. It is the part of this package most worth und
   loopback. `stickies dashboard --link` mints an authorized link; redeeming it sets an
   `HttpOnly SameSite=Strict` cookie, scoped per port so two dashboards do not evict each other.
   Scripts can send `X-Stickies-Key` instead. Opt out with `STICKIES_DASHBOARD_AUTH=0`.
-  - Links carry a **short-lived HMAC token derived from the key and the current 5-minute bucket**,
-    never the key itself — so an old link in terminal scrollback is inert, and the raw key is not
-    accepted in a URL at all. The gate stops another account on a shared host; it does **not**
-    stop code running as you.
+  - Links carry a **short-lived HMAC token derived from the key, the port, and the current
+    5-minute bucket**, never the key itself — so an old link in terminal scrollback is inert, and
+    the raw key is not accepted in a URL at all. The port is signed so a token is only valid for
+    the dashboard it was minted for: without that, another account on a shared host could squat
+    the default port, answer `/api/health` as Stickies, collect a token from your Ctrl+click and
+    replay it against your real dashboard on another port. The gate stops another account on a
+    shared host; it does **not** stop code running as you.
   - The key file is written mode `0600`. On Windows that is largely nominal — Node maps only the
     read-only bit, so the file's real protection is the ACL on your home directory.
 - **Board writeback is off by default.** `STICKIES_BOARD_WRITEBACK=1` lets dragging a card

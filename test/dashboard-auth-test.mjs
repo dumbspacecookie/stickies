@@ -92,18 +92,32 @@ try {
   // Links end up in scrollback, browser history and process command lines. What goes in one is a
   // token derived from the key and the current five-minute bucket, so a link found later is dead.
   const { linkToken, verifyLinkToken } = await import('../src/dashboard-auth.js');
-  const TOKEN = linkToken(KEY);
+  const TOKEN = linkToken(PORT, KEY);
   check(/^[0-9a-f]{32}$/.test(TOKEN) && TOKEN !== KEY, 'a link token is derived from the key, and is not the key');
-  check(verifyLinkToken(TOKEN, KEY), 'the current window verifies');
+  check(verifyLinkToken(TOKEN, PORT, KEY), 'the current window verifies');
+
+  // A token is only good for the dashboard it was minted for.
+  //
+  // Before the port was signed, every token was interchangeable between instances sharing the key
+  // file. On a shared host that is a real path in: another account squats the default port before
+  // your dashboard starts and answers /api/health as Stickies, your statusline links there, you
+  // Ctrl+click, and the squatter replays the token it just received against your real dashboard on
+  // whatever port it ended up on. Proven by replay against a live server before this was fixed.
+  check(!verifyLinkToken(TOKEN, PORT + 1, KEY),
+    'a token minted for one port does NOT verify against another');
+  check(!verifyLinkToken(linkToken(9999, KEY), PORT, KEY),
+    'and a token minted elsewhere does not open this one');
+  check(verifyLinkToken(linkToken(String(PORT), KEY), PORT, KEY),
+    'a string port and a numeric port sign identically (the CLI passes strings)');
   // Both times pinned. Buckets are absolute (floor(t / 5min)), so "six minutes ago" is one bucket
   // back or two depending on where the wall clock happens to sit inside the window — a coin flip,
   // which is exactly the kind of assertion that goes red at 3am for no reason. Minting at T and
   // checking at T + one window is one bucket later by construction, every time.
   const WINDOW = 5 * 60 * 1000;
   const T = 1_800_000_000_000; // any fixed instant
-  check(verifyLinkToken(linkToken(KEY, T), KEY, T + WINDOW),
+  check(verifyLinkToken(linkToken(PORT, KEY, T), PORT, KEY, T + WINDOW),
     'a token stays valid into the next window, so a link cannot die mid-click');
-  check(!verifyLinkToken(linkToken(KEY, T), KEY, T + 12 * WINDOW),
+  check(!verifyLinkToken(linkToken(PORT, KEY, T), PORT, KEY, T + 12 * WINDOW),
     'an hour-old link from scrollback does NOT');
   const keyInUrl = await fetch(`${base}/?k=${KEY}`, { redirect: 'manual' });
   check(keyInUrl.status === 401, `and the raw key is refused in a URL entirely (got ${keyInUrl.status})`);

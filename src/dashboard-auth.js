@@ -150,20 +150,33 @@ export function parseCookies(header) {
 // place for anyone with an old link, and there is nothing a URL needs it for.
 const LINK_WINDOW_MS = 5 * 60 * 1000;
 
-function bucketToken(key, bucket) {
-  return createHmac('sha256', key).update(`stickies-link:${bucket}`).digest('hex').slice(0, 32);
+// The PORT is part of what is signed, so a token is only good for the dashboard it was minted
+// for. Without it every token was interchangeable across instances, which handed a shared host
+// this: another account squats 127.0.0.1:<the default port> before your dashboard starts and
+// answers /api/health as Stickies. Your statusline links there, you Ctrl+click, and the squatter
+// now holds a valid token — which it replays, inside the same five-minute window, against the
+// real dashboard on whatever port that ended up on, and reads your notes and project paths.
+// Verified by replay before the fix: a token minted for port 9999 was accepted by a dashboard on
+// another port. SECURITY.md claims the gate stops another account on a shared host, and it should.
+//
+// Number(port) || 0 so a string port and a numeric one sign identically — the CLI passes strings.
+function bucketToken(key, bucket, port) {
+  return createHmac('sha256', key)
+    .update(`stickies-link:${Number(port) || 0}:${bucket}`)
+    .digest('hex')
+    .slice(0, 32);
 }
 
-export function linkToken(key = readAuthKey(), at = Date.now()) {
+export function linkToken(port, key = readAuthKey(), at = Date.now()) {
   if (!key) return null;
-  return bucketToken(key, Math.floor(at / LINK_WINDOW_MS));
+  return bucketToken(key, Math.floor(at / LINK_WINDOW_MS), port);
 }
 
-export function verifyLinkToken(offered, key = readAuthKey(), at = Date.now()) {
+export function verifyLinkToken(offered, port, key = readAuthKey(), at = Date.now()) {
   if (!key || typeof offered !== 'string' || !offered) return false;
   const now = Math.floor(at / LINK_WINDOW_MS);
   for (const bucket of [now, now - 1]) {
-    if (keyMatches(offered, bucketToken(key, bucket))) return true;
+    if (keyMatches(offered, bucketToken(key, bucket, port))) return true;
   }
   return false;
 }
@@ -216,7 +229,7 @@ export function authKind(req, url, key, port) {
   // URLs — scrollback, history, a Referer, a process command line — ever holds a credential that
   // outlives the minute it was made.
   const offered = url ? url.searchParams.get(KEY_PARAM) : null;
-  if (verifyLinkToken(offered, key)) return 'query';
+  if (verifyLinkToken(offered, port, key)) return 'query';
   // Consuming, and deliberately last: a one-shot ticket is spent by looking at it. authKind is
   // called once per request, from the handler.
   if (redeemTicket(offered)) return 'query';
@@ -233,7 +246,7 @@ export function cookieHeader(key, port) {
 // The link to hand a human. Built by anything that can read the key file — the statusline, the
 // CLI, the server itself. Carries a time-boxed token by default; `credential` overrides it with a
 // one-shot ticket for the `--open` path, where the URL becomes a process command line.
-export function authorizedUrl(port, path = '/', credential = linkToken()) {
+export function authorizedUrl(port, path = '/', credential = linkToken(port)) {
   const base = `http://127.0.0.1:${port}${path}`;
   if (!credential || !authEnabled()) return base;
   return base + (path.includes('?') ? '&' : '?') + `${KEY_PARAM}=${encodeURIComponent(credential)}`;

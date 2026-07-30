@@ -49,6 +49,14 @@ changed first so that installing a notes plugin doesn't hand you things you didn
 
 ### Fixed
 
+- **Writeback confined the backup it wrote but not the file it edited.** A `.planning` directory
+  that was a symlink or an unprivileged Windows junction pointing outside the project let one card
+  drag rewrite a `**Status:**` line in a file elsewhere on disk. Found by attacking a live
+  dashboard during this release's audit, before any of it shipped.
+- **Authorized links are now bound to the port they were minted for.** Previously every token was
+  interchangeable between dashboards sharing the key file, so on a shared host another account
+  could squat the default port, answer as Stickies, harvest a token from a Ctrl+click and replay it
+  against the real dashboard. Confirmed by replay, then closed.
 - A `Host` guard rejects DNS-rebinding attempts before any cookie is consulted.
 - A corrupt or truncated dashboard key file used to be a permanent lockout — the server started
   healthy and refused everything forever while saying nothing. Keys are now written atomically

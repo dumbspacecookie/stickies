@@ -77,7 +77,7 @@ try {
   // rather than injecting a cookie means this test also proves the redemption works in a real
   // browser — the statusline click is the only route most people ever use.
   const { linkToken } = await import('../src/dashboard-auth.js');
-  const token = linkToken();
+  const token = linkToken(PORT);
   check(!!token, 'the dashboard wrote a read key the browser can derive a link token from');
   const boardUrl = `${base}/board?project=${encodeURIComponent(PROJ_A.replace(/\\/g, '/'))}`;
   await browser.goto(`${boardUrl}&k=${token}`);
