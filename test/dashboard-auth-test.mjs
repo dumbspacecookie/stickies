@@ -92,6 +92,15 @@ try {
   // Links end up in scrollback, browser history and process command lines. What goes in one is a
   // token derived from the key and the current five-minute bucket, so a link found later is dead.
   const { linkToken, verifyLinkToken } = await import('../src/dashboard-auth.js');
+  // The cookie outlives the browser session on purpose: session-scoped meant every browser
+  // restart began by hunting for a fresh link, and that friction is what gets a security control
+  // switched off wholesale. Still HttpOnly + Strict; the key file remains the revocation point.
+  {
+    const { cookieHeader } = await import('../src/dashboard-auth.js');
+    const h = cookieHeader(KEY, PORT);
+    check(/Max-Age=2592000/.test(h), 'the auth cookie lasts 30 days, not just the browser session');
+    check(/HttpOnly/.test(h) && /SameSite=Strict/.test(h), 'and is still HttpOnly + SameSite=Strict');
+  }
   const TOKEN = linkToken(PORT, KEY);
   check(/^[0-9a-f]{32}$/.test(TOKEN) && TOKEN !== KEY, 'a link token is derived from the key, and is not the key');
   check(verifyLinkToken(TOKEN, PORT, KEY), 'the current window verifies');

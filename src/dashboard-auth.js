@@ -237,10 +237,18 @@ export function authKind(req, url, key, port) {
 }
 
 // The cookie is Strict on purpose: it is what stops a page on another origin navigating you to
-// the dashboard and reading the result. Session-scoped (no Max-Age) so closing the browser ends
-// it; the link can always mint another.
+// the dashboard and reading the result.
+//
+// It used to be session-scoped, which meant closing your browser logged you out and every
+// morning began by hunting for a fresh link. That is the kind of friction that gets a security
+// control switched off entirely (STICKIES_DASHBOARD_AUTH=0), so the conservative default was
+// quietly the less safe one. Thirty days instead: still HttpOnly, still Strict, still a value
+// that only works against loopback, and still revocable by deleting the key file — which
+// invalidates every outstanding cookie at once, since the cookie IS the key.
+const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
+
 export function cookieHeader(key, port) {
-  return `${cookieName(port)}=${key}; Path=/; HttpOnly; SameSite=Strict`;
+  return `${cookieName(port)}=${key}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${COOKIE_MAX_AGE_S}`;
 }
 
 // The link to hand a human. Built by anything that can read the key file — the statusline, the

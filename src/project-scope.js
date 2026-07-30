@@ -15,7 +15,7 @@
 // Counting only active notes made the allowlist a function of how tidy your board is: dismiss
 // the last note in a project and its board stops being reachable.
 
-import { normalizeProjectPath } from './store-path.js';
+import { normalizeProjectPath, projectIdentity } from './store-path.js';
 import { registeredProjects } from './store.js';
 import { sessionProjects } from './session-marker.js';
 
@@ -70,6 +70,21 @@ export function knownProjects(launchProject, { fresh = false } = {}) {
   return set;
 }
 
+// Is this path in the allowlist? Exact hit first, then identity.
+//
+// The second pass exists for Windows, where one directory has many spellings and the allowlist
+// holds whichever one happened to be recorded. Without it the dashboard answers "Unknown project"
+// for the folder you are standing in, because a shell handed it over with a different capital.
+// The exact check stays first so the common path is still a single hash lookup, and the scan only
+// runs on a miss over a set the size of your project list.
+function allows(set, want) {
+  if (set.has(want)) return true;
+  const id = projectIdentity(want);
+  if (!id) return false;
+  for (const p of set) if (projectIdentity(p) === id) return true;
+  return false;
+}
+
 // Resolve the project for one request.
 //
 // No ?project= => the launch project, i.e. exactly the old behaviour. A value that is not
@@ -86,11 +101,11 @@ export function resolveProject(requested, launchProject) {
   // be the same substitution this module refuses two lines below — the lie moved, not removed.
   const want = normalizeProjectPath(requested);
   if (!want) return { ok: false, project: null, requested: String(requested) };
-  if (knownProjects(launchProject).has(want)) return { ok: true, project: want };
+  if (allows(knownProjects(launchProject), want)) return { ok: true, project: want };
   // A genuinely new project may have registered since the last cache fill — pay for one fresh
   // rebuild before rejecting, so a just-opened terminal isn't told "unknown". Throttled: if
   // another miss just did this, answer from what we already know rather than rebuilding again.
-  if (mayRebuild() && knownProjects(launchProject, { fresh: true }).has(want)) {
+  if (mayRebuild() && allows(knownProjects(launchProject, { fresh: true }), want)) {
     return { ok: true, project: want };
   }
   return { ok: false, project: null, requested: want };

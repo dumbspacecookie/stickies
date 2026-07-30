@@ -7,7 +7,7 @@
 // machine, which is the best we can do without a remote.
 
 import { spawnSync } from 'node:child_process';
-import { normalizeProjectPath } from './store-path.js';
+import { normalizeProjectPath, projectIdentity } from './store-path.js';
 
 const cache = new Map(); // normalized path -> key
 
@@ -72,7 +72,10 @@ export function deriveProjectKey(projectPath) {
   if (cache.has(np)) return cache.get(np);
 
   const remote = gitRemote(np);
-  const key = (remote && canonicalizeRemote(remote)) || `path:${np}`;
+  // The path fallback keys on projectIdentity, not the stored path: on Windows two spellings of
+  // one directory must produce ONE key, or a note written from a shell that capitalised the path
+  // differently is invisible from the other. A git remote already has this property.
+  const key = (remote && canonicalizeRemote(remote)) || `path:${projectIdentity(np)}`;
   cache.set(np, key);
   return key;
 }

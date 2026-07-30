@@ -26,3 +26,23 @@ export function normalizeProjectPath(p) {
   if (UNSAFE_IN_PATH.test(out)) return null;
   return out === '' ? null : out;
 }
+
+// The form used to decide whether two paths are THE SAME PROJECT — as opposed to
+// normalizeProjectPath, which produces the form we store and show you.
+//
+// Windows filesystems are case-insensitive: `C:/Users/Ash/proj` and `C:/Users/ash/proj` are one
+// directory. Treating them as two projects meant a note written from one shell was invisible from
+// another, and the dashboard answered "Unknown project" for a folder you were standing in — the
+// same symptom, and the same confusion, as a project that had un-registered itself.
+//
+// Deliberately NOT folded on POSIX, where `/home/A` and `/home/a` genuinely are different
+// directories and folding them would merge two people's notes.
+//
+// Kept separate from the stored value on purpose: lower-casing what we store would make every
+// path in the dashboard and every report shout back in the wrong case for the sake of a
+// comparison. Identity is a derived thing; display is not.
+export function projectIdentity(p) {
+  const np = normalizeProjectPath(p);
+  if (!np) return null;
+  return process.platform === 'win32' ? np.toLowerCase() : np;
+}
