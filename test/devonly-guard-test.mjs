@@ -21,9 +21,15 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 // Paths that are dev-only, and why.
 const DEV_ONLY = [
   ['src/apprentice.js', 'apprentice mode — private dogfood, not a released feature'],
+  ['src/apprentice-page.js', 'apprentice dashboard page'],
   ['src/apprentice-report.js', 'apprentice mode reporting'],
   ['test/apprentice-test.mjs', 'apprentice mode tests'],
 ];
+
+// `src/dashboard.js` deliberately DOES mention apprentice: it optional-imports the page module in
+// a try/catch so the file can stay byte-identical between the trees, and the route is registered
+// only when the module resolves. That seam is why the token is not banned outright — the check
+// that matters is that the modules themselves are absent, which is what makes the route absent.
 
 // Strings that must not appear in the public package manifest either — a feature can leak by
 // being wired into `npm test` or a bin even if its file was excluded.

@@ -26,6 +26,21 @@ import { maybeAutoSync } from './git-sync.js';
 import { resolveProject, knownProjects } from './project-scope.js';
 import { DEFAULT_PORT } from './dashboard-port.js';
 
+// Optional, dev-only. Present in the development tree, absent from the published package — and
+// this file has to work unchanged in both, because it is ported wholesale and any divergence
+// becomes a hand-merge on every release. A failed import here is the normal case, not an error:
+// it means this build simply does not have the feature, and the two routes that use it are never
+// registered. Resolved once at startup so no request pays for the attempt.
+let APPRENTICE = null;
+try {
+  APPRENTICE = await import('./apprentice-page.js').then(async (page) => ({
+    ...page,
+    ...(await import('./apprentice.js')),
+  }));
+} catch {
+  /* not this build */
+}
+
 // Board writeback edits a project's .planning/ROADMAP.md, so it is opt-in: a dashboard should
 // not gain the power to rewrite planning documents just by being open. The board page asks this
 // too, and hides its drag affordances when it is off, so the feature is never a dead gesture.
@@ -320,6 +335,23 @@ async function handle(req, res) {
     if (scope === null) return;
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     res.end(renderGraphPage({ project: scope }));
+    return;
+  }
+
+  // Apprentice, if this build has it. See the optional import near the top of the file: in a tree
+  // without src/apprentice-page.js these two routes simply do not exist, and everything else here
+  // is identical — which is what keeps this file portable between the dev and public trees.
+  if (APPRENTICE && req.method === 'GET' && path === '/apprentice') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(APPRENTICE.renderApprenticePage({ weeks: Number(url.searchParams.get('weeks')) || 2 }));
+    return;
+  }
+  if (APPRENTICE && req.method === 'GET' && path === '/api/apprentice') {
+    const weeks = Number(url.searchParams.get('weeks'));
+    // Clamped rather than trusted: this value reaches a date subtraction, and a NaN or a wild
+    // number would silently produce a window that is empty or the whole history.
+    const w = Number.isInteger(weeks) && weeks > 0 && weeks <= 520 ? weeks : 2;
+    json(res, 200, APPRENTICE.analyze(APPRENTICE.loadRows(), { weeks: w }));
     return;
   }
 
