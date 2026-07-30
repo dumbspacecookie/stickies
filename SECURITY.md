@@ -10,8 +10,10 @@ or publishing it.
 
 - **Single local user.** All stickies for all projects live in one DB
   (`$STICKIES_DB` or `~/.stickies/stickies.db`) with normal user file permissions.
-- **No authentication.** Anything running as your user can read the store, and can reach the
-  dashboard's loopback API for as long as you have a dashboard running.
+- **No authentication against yourself.** The store is a file readable by your user, and while a
+  dashboard is running, anything running as you can authorize itself to it by reading the same
+  key file you do. The dashboard's read gate raises the bar against *another account* on a shared
+  host and against a drive-by web page — not against code already running as you.
 - **Network is opt-in — but it is not "none".** Three paths can carry note content off this
   machine, all off by default. See [Egress](#egress) for exactly what leaves and when.
 - A note written in one project (or synced from another machine) is **untrusted input**
@@ -48,14 +50,55 @@ home, or contacts any endpoint the author controls; every destination is one you
 | Surface | Notes |
 |---------|-------|
 | **Post-turn Stop hook** (`src/auto-capture.js`) | Parses `!!sticky …` directives from the just-finished assistant turn and persists them. Directive content flows through the same `createSticky` path → secret redaction + size/tag bounds apply; writes are deduped and scoped to `cwd`; storing a note is not code execution. The hook is non-blocking and never emits a `block` decision, so it can't cause a stop loop. It trusts `transcript_path`/`cwd` from the (local, Claude-Code-issued) hook event. |
-| **Local web dashboard** (`src/dashboard.js`) | Binds **127.0.0.1 only**. Mutations (`/api/dismiss`, `/api/create`) require a per-launch random token **and** a same-origin/no `Origin` check → a drive-by website cannot dismiss or create stickies (CSRF-defended; verified in `test/dashboard-test.mjs`). The page renders note bodies via `textContent`, never `innerHTML`, so a sticky can't inject script into the dashboard. No external assets/CDN. Read endpoints aren't token-gated, but cross-origin pages can't read responses (no CORS headers granted). |
+| **Local web dashboard** (`src/dashboard.js`) | Binds **127.0.0.1 only**, on port 7317 by default. Mutations (`/api/dismiss`, `/api/create`) require a per-launch random token **and** a same-origin/no `Origin` check → a drive-by website cannot dismiss or create stickies (CSRF-defended; verified in `test/dashboard-test.mjs`). A `Host` header guard rejects DNS-rebinding attempts. The page renders note bodies via `textContent`, never `innerHTML`, so a sticky can't inject script into the dashboard. No external assets/CDN. **Reads are gated too** — see [Dashboard](#dashboard-the-widest-surface-stickies-has). |
 
 | **Auto-sync** (`maybeAutoSync` in `src/git-sync.js`) | Doubly gated: runs only when **both** `$STICKIES_AUTO_SYNC` is truthy **and** `$STICKIES_SYNC_REPO` is set. When on, the SessionStart hook pulls and the Stop hook pushes (only on turns that captured a new sticky). Best-effort: any failure is swallowed so it can't break a session. Off by default — no automatic git/network activity unless you opt in. |
 | **Git sync** (`src/git-sync.js`, `src/sync.js`) | Opt-in and off by default — does nothing unless `$STICKIES_SYNC_REPO` points at a git working copy you own. All git calls use argument arrays (never a shell string), so repo paths/commit messages can't inject shell commands. Pull/push only happen if the repo has a remote you configured; with no remote it's purely local. **The exported sync document is plaintext JSON** containing all note bodies — store it in a **private** repo. Secret redaction still applies on write, but treat the repo as containing your notes. Merge is last-writer-wins by `updated_at`; a malicious/edited sync file can only add/replace stickies (data), not execute code, and bad records are skipped. Records arriving from a sync document are redacted on import as well as on write, so a hand-edited or older-build document cannot re-import raw secrets into the local store. |
 
-Dashboard residual: any local process running as you can reach the loopback API while the
-dashboard is running (single-user assumption). Stop it when not in use. It does not auto-start —
-a dashboard runs only for as long as you have one running.
+## Dashboard — the widest surface Stickies has
+
+The dashboard is a real HTTP server holding your notes and, if you turn writeback on, a write
+path into your planning documents. It is the part of this package most worth understanding.
+
+- **It does not start itself.** Autostart is **off unless `STICKIES_DASHBOARD_AUTOSTART=1`**.
+  Installing this package does not put a server on your machine; you get one when you run
+  `stickies dashboard`. With autostart on, the SessionStart hook brings one up if none is
+  running, announces it once, and skips entirely in CI and remote/cloud sessions — an explicit
+  opt-in does **not** override that, because a listener on a build agent is never what was meant.
+  `stickies dashboard --stop` ends a running one.
+- **One dashboard serves every project you have touched**, not just the folder it was launched
+  from — any project that has ever had a sticky (dismissed ones count), plus any a Claude session
+  ran in recently. `/api/projects` enumerates those paths to a caller holding the read key. A
+  `?project=` value outside that allowlist is refused rather than quietly serving the launch
+  project.
+- **Loopback is not an authentication boundary.** Anything running as you can reach 127.0.0.1,
+  so reads are gated by a key file (`$STICKIES_HOME/dashboard-auth.key`) rather than by being on
+  loopback. `stickies dashboard --link` mints an authorized link; redeeming it sets an
+  `HttpOnly SameSite=Strict` cookie, scoped per port so two dashboards do not evict each other.
+  Scripts can send `X-Stickies-Key` instead. Opt out with `STICKIES_DASHBOARD_AUTH=0`.
+  - Links carry a **short-lived HMAC token derived from the key and the current 5-minute bucket**,
+    never the key itself — so an old link in terminal scrollback is inert, and the raw key is not
+    accepted in a URL at all. The gate stops another account on a shared host; it does **not**
+    stop code running as you.
+  - The key file is written mode `0600`. On Windows that is largely nominal — Node maps only the
+    read-only bit, so the file's real protection is the ACL on your home directory.
+- **Board writeback is off by default.** `STICKIES_BOARD_WRITEBACK=1` lets dragging a card
+  rewrite that phase's `**Status:**` line in `.planning/ROADMAP.md`. Pre-edit copies are kept in
+  `.flow/roadmap-backups/`, the target path is realpath-confined, the temp file is created with
+  `wx` so a planted symlink cannot be followed, and a move that contradicts the plan checkboxes
+  is refused rather than written.
+- **`stickies doctor`** abbreviates your home directory to `~` in both rendered and JSON output.
+  `--raw` prints full paths — do not paste that into a public issue.
+- **`--stop` asks; it does not signal.** The dashboard writes a random nonce into
+  `$STICKIES_HOME/dashboard-<port>.pid`. `--stop` reads it and POSTs it to `/api/stop`, and the
+  process ends *itself*. No signal is sent to a pid, so a stale pidfile naming a recycled pid
+  cannot get an unrelated process killed. The nonce is published nowhere: `/api/health` returns
+  only `{ok, app, project, port, pid}`, so an unauthenticated route has no secret to scrape and
+  replay. A port-holder that ignores the request is reported as still running; nothing escalates
+  to a kill.
+
+Residual: while a dashboard is running, any local process running as you can reach it. That is
+the single-user assumption this whole tool rests on. Stop it when you are not using it.
 
 ## Repo-mode (`stickies init-repo`)
 

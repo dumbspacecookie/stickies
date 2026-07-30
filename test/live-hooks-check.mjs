@@ -2,14 +2,16 @@
 import { spawnSync } from 'node:child_process';
 import { writeFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir, homedir } from 'node:os';
+import { homedir } from 'node:os';
+import { scratchDir } from './_env.mjs';
 
 // Path to the installed plugin cache. Override with STICKIES_CACHE; defaults under the
 // current user's home so no absolute author path is baked in.
 const CACHE = process.env.STICKIES_CACHE || join(homedir(), '.claude/plugins/cache/stickies-local/stickies/0.6.1/src');
-const proj = join(tmpdir(), 'live_hook_proj');
+const ROOT = scratchDir('livehook'); // this run's own, rather than fixed names in the shared temp dir
+const proj = join(ROOT, 'live_hook_proj');
 mkdirSync(proj, { recursive: true });
-const db = join(tmpdir(), 'live_hook.db');
+const db = join(ROOT, 'live_hook.db');
 for (const s of ['', '-wal', '-shm']) { try { rmSync(db + s); } catch {} }
 const env = { ...process.env, STICKIES_DB: db };
 

@@ -3,16 +3,20 @@
 // the type alone drops any directive written before the turn's final tool use — the
 // common case when the model captures a fact mid-work and then keeps going.
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { scratchDir, cleanup } from './_env.mjs';
 
-const db = join(tmpdir(), 'stickies_turnboundary_test.db');
+// This run's own directory: fixed names in the shared temp dir mean two concurrent runs share
+// one sqlite file and one transcript, and read each other's captures as their own.
+const ROOT = scratchDir('turnboundary');
+const db = join(ROOT, 'stickies_turnboundary_test.db');
 for (const s of ['', '-wal', '-shm']) { try { rmSync(db + s); } catch {} }
 const env = { ...process.env, STICKIES_DB: db };
 
-const cwd = join(tmpdir(), 'turnboundary_proj');
-const transcript = join(tmpdir(), 'turnboundary_transcript.jsonl');
+const cwd = join(ROOT, 'turnboundary_proj');
+mkdirSync(cwd, { recursive: true });
+const transcript = join(ROOT, 'turnboundary_transcript.jsonl');
 
 const human = (text) => ({ type: 'user', message: { role: 'user', content: text } });
 const toolResult = () => ({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'ok' }] } });
@@ -71,4 +75,6 @@ checks.push(['earlier turns are not re-scanned', !after.some((s) => s.content.in
 for (const [label, ok] of checks) console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}`);
 const allOk = checks.every(([, ok]) => ok);
 console.log('\n' + (allOk ? 'TURN BOUNDARY OK' : 'TURN BOUNDARY FAILED'));
+try { (await import('../src/db.js')).closeDb(); } catch { /* nothing open */ }
+cleanup(ROOT);
 process.exit(allOk ? 0 : 1);

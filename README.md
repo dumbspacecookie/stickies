@@ -33,7 +33,8 @@ Restart Claude Code. That's it — install once, it works in every project. Now 
   Claude writes it down; it'll be waiting for you next session.
 - **See your notes:** type `/stickies` in Claude Code. Prefer a shell? `npm i -g stickies-mcp`
   gives you a `stickies` command — then `stickies list`.
-- **Open the board in a browser:** `/stickies dashboard` → `http://127.0.0.1:4317/`.
+- **Open the board in a browser:** `/stickies dashboard`, then `stickies dashboard --link` for an
+  authorized URL (the board serves your notes, so it only answers a browser you've let in).
 
 Nothing leaves your machine. Everything is a local SQLite file on your disk until *you* turn on
 optional git sync.
@@ -191,14 +192,40 @@ follows `STICKIES_DASHBOARD_PORT`.
 ## Dashboard
 
 ```sh
-stickies dashboard                 # http://127.0.0.1:4317/
+stickies dashboard                 # http://127.0.0.1:7317/
 stickies dashboard --open          # and open the browser
 stickies dashboard --detach        # run in the background
+stickies dashboard --link          # print an authorized URL for a browser
+stickies dashboard --stop          # stop the running one
 ```
 
-Loopback only (never leaves `127.0.0.1`); mutations are gated by an in-page token, so a random
-web page can't poke it. Routes: `/` the notes board, `/board` the Flow Board Kanban, `/graph` the
-plan dependency DAG.
+Loopback only (never leaves `127.0.0.1`). Routes: `/` the notes board, `/board` the Flow Board
+Kanban, `/graph` the plan dependency DAG. One dashboard covers **every** project you take notes
+in — the header switcher moves between them, so you don't run one per folder.
+
+**It only starts when you ask.** Installing Stickies does not put a server on your machine. If
+you'd rather each Claude session bring one up automatically, set `STICKIES_DASHBOARD_AUTOSTART=1`
+(skipped in CI and remote sessions regardless).
+
+**"Not authorized"?** That's expected, not a bug. The dashboard serves your notes and planning
+documents, so it answers only a browser you've authorized:
+
+```sh
+stickies dashboard --link          # → paste into your browser
+```
+
+…or Ctrl+click the Stickies segment in your statusline, which carries one. Opening the link sets
+a cookie; that's what lasts. Links themselves expire after a few minutes, so an old one from your
+scrollback will be refused — get a fresh one. Prefer it open? `STICKIES_DASHBOARD_AUTH=0`.
+
+**Editing the plan from the board** is off by default. With `STICKIES_BOARD_WRITEBACK=1`, dragging
+a card rewrites that phase's `**Status:**` line in `.planning/ROADMAP.md`, keeping a pre-edit copy
+in `.flow/roadmap-backups/`. A move that contradicts the phase's plan checkboxes is refused rather
+than written.
+
+Something not behaving? `stickies doctor` reports the whole setup in one shot — what's running,
+on which port, whether the installed plugin copy is stale — with your home directory abbreviated
+to `~` so the output is safe to paste.
 
 ---
 

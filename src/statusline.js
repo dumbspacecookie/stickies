@@ -15,6 +15,9 @@
 import { pathToFileURL } from 'node:url';
 import { readStickies } from './store.js';
 import { dueStatus } from './due.js';
+import { normalizeProjectPath } from './store-path.js';
+import { authorizedUrl } from './dashboard-auth.js';
+import { dashboardPort } from './dashboard-port.js';
 
 const ESC = '[';
 const BOLD = `${ESC}1m`;
@@ -183,15 +186,21 @@ async function main() {
   // Make the whole segment a Ctrl+click hyperlink that opens the dashboard (the full,
   // clickable board — this project + global). Works in Windows Terminal, iTerm2/WezTerm/
   // Kitty/Ghostty. Skipped under tmux (mangles OSC 8) and with --no-link. If OSC 8
-  // interferes with mouse select-to-copy in your terminal, pass --no-link. Needs the
-  // dashboard running (`stickies dashboard`) for the click to land.
+  // interferes with mouse select-to-copy in your terminal, pass --no-link. The SessionStart
+  // hook starts a dashboard if none is running, so the click lands without setup.
   const linkable = line && !flag('--no-link') && !process.env.TMUX;
   if (linkable) {
-    const port = process.env.STICKIES_DASHBOARD_PORT || 4317;
-    // Link to the dashboard root. (An earlier build appended a #note-<id> fragment to deep-
-    // link the hottest note, but that broke Ctrl+click in Windows Terminal — the fragment is
-    // dropped here. The dashboard still honours #note-<id> from Discord links and wikilinks.)
-    const url = `http://127.0.0.1:${port}/`;
+    const port = dashboardPort();
+    // ?project= scopes the page to THIS terminal's folder. One dashboard serves the whole
+    // machine, so a bare "/" showed whichever project launched the server — these counts with
+    // another folder's notes underneath. (An earlier build appended a #note-<id> fragment to
+    // deep-link the hottest note, but that broke Ctrl+click in Windows Terminal — the fragment
+    // is dropped here. The dashboard still honours #note-<id> from Discord links and wikilinks.)
+    // Carries the read key (see dashboard-auth.js): the dashboard redeems it for a cookie and
+    // bounces to the clean URL. Without it the click lands on a 401, which is exactly the
+    // "the link looks broken because it is" failure the autostart hook exists to prevent. This
+    // process can read the key because it runs as the user; that IS the authorization.
+    const url = authorizedUrl(port, `/?project=${encodeURIComponent(normalizeProjectPath(projectPath) || '')}`);
     process.stdout.write(`\x1b]8;;${url}\x1b\\${line}\x1b]8;;\x1b\\`);
   } else {
     process.stdout.write(line);

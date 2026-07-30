@@ -77,7 +77,9 @@ async function main() {
   const sessionId = event.session_id || 'unknown';
 
   const marker = markerPath(sessionId);
-  if (!existsSync(marker)) return; // no window -> nothing trustworthy to report
+  // null when there is no private place to keep markers (unwritable home). Same outcome as a
+  // missing one: no window, so nothing trustworthy to report.
+  if (!marker || !existsSync(marker)) return;
 
   let started;
   try {

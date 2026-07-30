@@ -2,11 +2,13 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { scratchDir, cleanup } from './_env.mjs';
 
-// Private temp DB unless caller pinned one, so the smoke test never hits ~/.stickies.
-const dbPath = process.env.STICKIES_DB || join(tmpdir(), 'stickies_mcp_npmtest.db');
+// Private temp DB unless caller pinned one, so the smoke test never hits ~/.stickies — and one
+// of this run's own, so two smoke tests at once do not share a store.
+const OWN_ROOT = process.env.STICKIES_DB ? null : scratchDir('mcpsmoke');
+const dbPath = process.env.STICKIES_DB || join(OWN_ROOT, 'stickies_mcp_npmtest.db');
 for (const suffix of ['', '-wal', '-shm']) {
   try { rmSync(dbPath + suffix); } catch {}
 }
@@ -50,3 +52,4 @@ console.log('dismiss ->', d.content[0].text);
 
 await client.close();
 console.log('MCP smoke OK');
+if (OWN_ROOT) cleanup(OWN_ROOT);

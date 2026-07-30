@@ -3,13 +3,15 @@
 // Nothing leaves the machine — the remote is a local bare repo in tmp.
 import { spawnSync } from 'node:child_process';
 import { rmSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { closeDb } from '../src/db.js';
 import { createSticky, getSticky, exportAllRows } from '../src/store.js';
 import { sync } from '../src/git-sync.js';
+import { scratchDir, cleanup } from './_env.mjs';
 
-const ROOT = join(tmpdir(), 'stickies_gitsync');
+// Own directory per run. This one wiped a FIXED root on startup, so a second concurrent run
+// deleted the first run's bare remote out from under it mid-push.
+const ROOT = scratchDir('gitsync');
 const REMOTE = join(ROOT, 'remote.git');
 const WA = join(ROOT, 'machineA');
 const WB = join(ROOT, 'machineB');
@@ -73,4 +75,5 @@ check(aCount === 2 && bCount === 2, `both machines converged to 2 stickies (A=${
 
 console.log('\n' + (fail === 0 ? 'GIT SYNC OK' : fail + ' FAILURES'));
 closeDb();
+cleanup(ROOT);
 process.exitCode = fail === 0 ? 0 : 1;

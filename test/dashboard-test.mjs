@@ -1,20 +1,26 @@
 // Boots the real dashboard server and exercises the API + CSRF gate.
 import { spawn } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
+import { connect as netConnect } from 'node:net';
 import { rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { freePort, scratchDir, cleanup, authHeaders } from './_env.mjs';
 import { join } from 'node:path';
 
-const db = join(tmpdir(), 'stickies_dash_test.db');
+const SCRATCH = scratchDir('dash');
+const db = join(SCRATCH, 'dash.db');
+const PORT = await freePort();
 for (const s of ['', '-wal', '-shm']) { try { rmSync(db + s); } catch {} }
 // Isolate from the developer's real sync config. An inherited STICKIES_AUTO_SYNC +
 // STICKIES_SYNC_REPO makes a dismiss trigger maybeAutoSync(), which pulls the real note
 // repo into this temp DB — so read counts jump around (the long-standing "count grows
 // each run" flake). Blanking the sync vars keeps the test hermetic.
-const NO_SYNC = { STICKIES_AUTO_SYNC: '', STICKIES_SYNC_REPO: '', STICKIES_SYNC_FILE: '' };
+// STICKIES_HOME too: without it the spawned dashboard reads the developer's real
+// ~/.stickies/sessions when building its project allowlist. Read-only today, but it is one
+// project-count assertion away from being the next "count grows each run" flake.
+const NO_SYNC = { STICKIES_AUTO_SYNC: '', STICKIES_SYNC_REPO: '', STICKIES_SYNC_FILE: '', STICKIES_HOME: join(SCRATCH, 'home') };
 const env = { ...process.env, STICKIES_DB: db, ...NO_SYNC };
-const PROJECT = join(tmpdir(), 'dash_proj');
-const PORT = 4399;
+const PROJECT = join(SCRATCH, 'proj');
+
 const base = `http://127.0.0.1:${PORT}`;
 
 // Seed two stickies (one project, one global) via the store.
@@ -29,8 +35,10 @@ const srv = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 's
 srv.stderr.on('data', (d) => process.stdout.write('  srv: ' + d));
 
 async function waitUp() {
+  // /api/health, not /api/stickies: liveness must not depend on being authorized, or a broken
+  // gate would present as "the server never started".
   for (let i = 0; i < 50; i++) {
-    try { await fetch(base + '/api/stickies'); return true; } catch { await new Promise((r) => setTimeout(r, 100)); }
+    try { await fetch(base + '/api/health'); return true; } catch { await new Promise((r) => setTimeout(r, 100)); }
   }
   return false;
 }
@@ -40,6 +48,15 @@ const check = (cond, msg) => console.log(`  ${cond ? 'PASS' : 'FAIL'}  ${msg}`) 
 
 try {
   if (!(await waitUp())) throw new Error('server did not start');
+
+  // Reads need proof of being the user now (src/dashboard-auth.js). Rather than thread a header
+  // through sixty call sites, authorize this whole client once — which is what a real browser is
+  // after it redeems the link. Per-request `headers` still win, so the tests that deliberately
+  // send a bad mutation token, or none, still exercise exactly what they did before.
+  const AUTH = authHeaders(join(SCRATCH, 'home'));
+  if (!AUTH['x-stickies-key']) throw new Error('no dashboard auth key was written — cannot authorize the test client');
+  const rawFetch = globalThis.fetch;
+  globalThis.fetch = (u, o = {}) => rawFetch(u, { ...o, headers: { ...AUTH, ...(o.headers || {}) } });
 
   // Page renders + embeds a token.
   const page = await (await fetch(base + '/')).text();
@@ -84,6 +101,85 @@ try {
 
   const bulkTooMany = await fetch(base + '/api/dismiss-bulk', { method: 'POST', headers: { 'content-type': 'application/json', 'x-stickies-token': token }, body: JSON.stringify({ ids: Array.from({ length: 501 }, (_, i) => 'id-' + i) }) });
   check(bulkTooMany.status === 400, `bulk over MAX_BULK rejected (got ${bulkTooMany.status})`);
+
+  // --- a body is bounded before it is buffered ---------------------------------------
+  // readBody used to concatenate with no ceiling, so a huge POST was assembled in memory in
+  // full and only then failed a content check. The token gates it, but a cap is one line.
+  // The assertion has to DISCRIMINATE. A 2MB `content` is rejected either way — capped before
+  // buffering, or buffered in full and then failed by createSticky's 500-char rule — so it
+  // passes against the unfixed code too. Instead: a VALID note, with the bulk in a field the
+  // server ignores. Capped => refused and nothing stored. Uncapped => 200 and a new sticky.
+  const beforeCount = (await (await fetch(base + '/api/stickies?all=1')).json()).count;
+  const padded = await fetch(base + '/api/create', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-stickies-token': token },
+    body: JSON.stringify({ content: 'a perfectly valid note', category: 'context', importance: 'P3', _pad: 'x'.repeat(400 * 1024) }),
+  }).catch((e) => ({ status: 'connection-closed: ' + e.message }));
+  check(padded.status !== 200, `a 400KB body is refused even when the note itself is valid (got ${padded.status})`);
+  const afterCount = (await (await fetch(base + '/api/stickies?all=1')).json()).count;
+  check(afterCount === beforeCount, `and nothing was stored (${beforeCount} -> ${afterCount})`);
+  // A body just under the cap with the same shape must still work, or the cap is simply broken.
+  const okSized = await fetch(base + '/api/create', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-stickies-token': token },
+    body: JSON.stringify({ content: 'a note with modest padding', category: 'context', importance: 'P3', _pad: 'x'.repeat(1024) }),
+  });
+  check(okSized.status === 200, `a normal-sized body still succeeds (got ${okSized.status})`);
+  // Put the store back: later assertions in this file count notes, and a probe that leaves one
+  // behind makes an unrelated test fail for a reason that has nothing to do with what it tests.
+  const okBody = await okSized.json();
+  await fetch(base + '/api/dismiss', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-stickies-token': token },
+    body: JSON.stringify({ id: okBody.sticky.id }),
+  });
+  const stillUp = await (await fetch(base + '/api/health')).json();
+  check(stillUp.app === 'stickies', 'and the server is still healthy afterwards');
+
+  // --- a bad token must not be able to KILL the server ------------------------------------
+  // The constant-time comparison first shipped with a JS-string length check, but timingSafeEqual
+  // compares BYTES: 'é'.repeat(32) is 32 code units and 64 bytes, so it passed the gate and threw
+  // RangeError inside the async handler — an unhandled rejection, which by default ends the
+  // process. One header, no token, dashboard dead for every terminal using it.
+  const multibyte = 'é'.repeat(token.length);
+  const killRes = await fetch(base + '/api/dismiss', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-stickies-token': multibyte },
+    body: JSON.stringify({ id: 'whatever' }),
+  }).catch((e) => ({ status: 'connection-died: ' + e.message }));
+  check(killRes.status === 403, `a multi-byte token is refused, not fatal (got ${killRes.status})`);
+  const aliveAfter = await (await fetch(base + '/api/health')).json().catch(() => null);
+  check(aliveAfter && aliveAfter.app === 'stickies', 'and the server is still serving afterwards');
+  // fetch() refuses to SEND a header outside Latin-1, so the reachable version of this is raw
+  // bytes on a socket — which is what "any local process" actually means here. Every byte value
+  // 0x80-0xFF arrives as a one-char latin1 string and re-encodes to two UTF-8 bytes.
+  const rawStatus = await new Promise((resolve) => {
+    const sock = netConnect(PORT, '127.0.0.1', () => {
+      const hdr = Buffer.from(Array.from({ length: token.length }, (_, i) => 0x80 + (i % 0x7f)));
+      const body = '{"id":"x"}';
+      sock.write(Buffer.concat([
+        // Carries the read key like any authorized client would: the point of this case is what
+        // the MUTATION token check does with high bytes, so it must get past the read gate first
+        // or it would prove only that the gate answered 401.
+        Buffer.from(`POST /api/dismiss HTTP/1.1\r\nHost: 127.0.0.1:${PORT}\r\ncontent-type: application/json\r\nx-stickies-key: ${AUTH['x-stickies-key']}\r\ncontent-length: ${body.length}\r\nx-stickies-token: `, 'latin1'),
+        hdr,
+        Buffer.from(`\r\n\r\n${body}`, 'latin1'),
+      ]));
+    });
+    let got = '';
+    sock.on('data', (d) => { got += d; if (got.includes('\r\n\r\n')) { sock.destroy(); resolve(got.split(' ')[1]); } });
+    sock.on('error', () => resolve('socket-error'));
+    setTimeout(() => { sock.destroy(); resolve(got ? got.split(' ')[1] : 'no-response'); }, 3000);
+  });
+  check(rawStatus === '403', `raw high-byte token bytes are refused, not fatal (got ${rawStatus})`);
+  check((await (await fetch(base + '/api/health')).json()).app === 'stickies', 'server survives all of them');
+
+  // The mutation gate is a constant-time comparison now; it must still behave exactly as before.
+  for (const bad of ['', 'x', token.slice(0, -1), token + 'a', token.toUpperCase()]) {
+    const r = await fetch(base + '/api/dismiss', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-stickies-token': bad },
+      body: JSON.stringify({ id: 'whatever' }),
+    });
+    check(r.status === 403, `a wrong token (${JSON.stringify(bad.slice(0, 8))}) is still refused (got ${r.status})`);
+  }
 
   // Mixed batch: two project notes + one global + one bogus id, in a single request.
   const bulkRes = await fetch(base + '/api/dismiss-bulk', {
@@ -140,7 +236,8 @@ try {
   // DNS-rebinding guard: a request with a foreign Host header is rejected (403) even on a read
   // route; the correct loopback Host still works. (fetch forbids setting Host, so use raw http.)
   const rawGet = (headers) => new Promise((resolve) => {
-    const r = httpRequest({ host: '127.0.0.1', port: PORT, path: '/api/stickies', method: 'GET', headers }, (res) => {
+    // Authorized, so this measures the Host guard rather than the read gate.
+    const r = httpRequest({ host: '127.0.0.1', port: PORT, path: '/api/stickies', method: 'GET', headers: { ...AUTH, ...headers } }, (res) => {
       let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve(res.statusCode));
     });
     r.on('error', () => resolve(0));
@@ -154,8 +251,9 @@ try {
   check(Array.isArray(cmd.projects) && cmd.totals && typeof cmd.totals.pct === 'number', '/api/command returns {projects, totals}');
   const here = cmd.projects.find((p) => p.current);
   // The API returns the normalized project_path (forward slashes); PROJECT here is the raw
-  // join() output, so match on the folder rather than an exact string.
-  check(!!here && here.project_path.endsWith('dash_proj'), 'command center includes the launched project, flagged current');
+  // join() output, so normalize before comparing rather than matching a literal folder name.
+  check(!!here && here.project_path === PROJECT.replace(/\\/g, '/'),
+    `command center includes the launched project, flagged current (got ${here && here.project_path})`);
   check(cmd.projects.every((p) => p.stickies && typeof p.stickies.p1 === 'number' && p.board), 'each project carries sticky counts + a board summary');
   const cpage = await (await fetch(base + '/command')).text();
   check(cpage.includes('Command Center'), '/command page renders');
@@ -197,4 +295,8 @@ try {
     srv.kill();
     setTimeout(resolve, 1500).unref?.();
   });
+  // …and then take the scratch directory with us. This suite never deleted it: thirty-one
+  // `stickies_dash_*` trees, one per run, each holding a sqlite database of test fixtures.
+  try { (await import('../src/db.js')).closeDb(); } catch { /* nothing open */ }
+  cleanup(SCRATCH);
 }

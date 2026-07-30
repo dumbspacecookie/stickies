@@ -144,12 +144,43 @@ project's notes matter, give it a git remote.
 **2. Zero conversational cost — the dashboard.**
 
 ```powershell
-node --disable-warning=ExperimentalWarning src/cli.js dashboard --detach   # → http://127.0.0.1:4317/
+node --disable-warning=ExperimentalWarning src/cli.js dashboard --detach   # → http://127.0.0.1:7317/
 ```
 
 A local web page. Add, browse, and dismiss by clicking, in a browser tab, while Claude is busy
 working. Nothing enters the conversation. Loopback-only and CSRF-gated, so nothing off this
 machine can reach it. **This is the best surface for reviewing and clearing the board.**
+
+### "Not authorized." — the one thing that will confuse you
+
+If the page says **Not authorized**, nothing is broken. The dashboard serves your notes *and*
+your planning documents, and being on `127.0.0.1` is not proof of being you — anything running on
+your machine is also on `127.0.0.1`. So it answers only a browser you have authorized:
+
+```powershell
+node --disable-warning=ExperimentalWarning src/cli.js dashboard --link
+```
+
+Paste that URL into the browser. Ctrl+clicking the Stickies segment in your statusline does the
+same thing. Opening it sets a cookie, and **the cookie is what lasts** — you do this once per
+browser, not once per visit.
+
+Three reasons an existing link stops working, all deliberate:
+
+1. **Links expire after a few minutes.** They carry a short-lived token, not your key, so an old
+   link sitting in terminal scrollback is inert. Get a fresh one.
+2. **A saved `?k=<key>` bookmark is refused outright.** Links no longer carry the raw key at all.
+3. **Cookies are per-browser and per-port.** A different browser, a private window, or a second
+   dashboard on another port each need their own.
+
+Want it open to any local browser instead? Set `STICKIES_DASHBOARD_AUTH=0`. Reasonable on a
+machine only you use; it does mean any process running as you can read your notes.
+
+### It shows every project, not just this one
+
+One dashboard covers every project you've taken notes in — switch with the control in the header.
+You don't need one per folder, and it does **not** start on its own; set
+`STICKIES_DASHBOARD_AUTOSTART=1` if you want each Claude session to bring one up for you.
 
 Two views, top right:
 
@@ -159,7 +190,7 @@ Two views, top right:
   first, with globals last. Without the grouping this view is a flat wall of every note you own
   and is genuinely unusable; the lanes are what make it a board.
 
-If the page looks stale after an update, the old server is probably still holding port 4317 —
+If the page looks stale after an update, the old server is probably still holding port 7317 —
 kill the `node` process on that port and relaunch.
 
 **3. Zero conversational cost — a second terminal.**

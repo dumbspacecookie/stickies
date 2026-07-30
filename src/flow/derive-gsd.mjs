@@ -32,7 +32,11 @@ export function classify(statusText, checkboxRatio) {
 // Parse ROADMAP.md text into phase cards. Exported separately so it can be unit-tested
 // without touching the filesystem.
 export function parseRoadmap(md) {
-  const lines = md.split(/\r?\n/); // ROADMAP.md is CRLF on Windows; strip \r or $ anchors miss
+  // ROADMAP.md is CRLF on Windows; strip \r or $ anchors miss. A LONE \r counts as a terminator
+  // too — writeback splits the same way, and if the two disagreed about where a line ends then
+  // writeback's own verification pass ("re-derive and check the move held") would be reading a
+  // different file from the one it just wrote.
+  const lines = md.split(/\r\n|\n|\r/);
   const cards = [];
   let cur = null;
 
@@ -66,7 +70,9 @@ export function parseRoadmap(md) {
       continue;
     }
     if (!cur) continue;
-    const st = line.match(/^\*\*Status:\*\*\s*(.+)$/);
+    // `[\s\S]`, not `.`: a dot will not cross an exotic line terminator (LS, PS), and a status
+    // the parser cannot see is a phase the board silently files under To-Do.
+    const st = line.match(/^\*\*Status:\*\*\s*([\s\S]+)$/);
     if (st) {
       cur.statusText = st[1].replace(/[✅⏳🚧]/gu, '').trim();
       continue;

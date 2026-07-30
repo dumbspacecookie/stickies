@@ -3,10 +3,13 @@
 // ship (every test used a fresh full-schema DB, so the upgrade path was never exercised).
 import { DatabaseSync } from 'node:sqlite';
 import { rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { scratchDir, cleanup } from './_env.mjs';
 
-const db = join(tmpdir(), 'stickies_migration_test.db');
+// Own directory per run: on a fixed path, a concurrent run migrates the same file and the
+// "upgrades from the OLD schema" premise is gone before this one looks at it.
+const ROOT = scratchDir('migration');
+const db = join(ROOT, 'stickies_migration_test.db');
 for (const s of ['', '-wal', '-shm']) { try { rmSync(db + s); } catch {} }
 
 // 1. Build a DB with the OLD (pre-0.5.0) schema — no project_key column — and seed a row.
@@ -49,4 +52,6 @@ check(!!getSticky(fresh.id), 'can write after migration');
 check(getSticky('old-1').project_key === null, 'legacy row keeps project_key NULL (matches by path)');
 
 console.log('\n' + (fail === 0 ? 'MIGRATION OK' : fail + ' FAILURES'));
+try { (await import('../src/db.js')).closeDb(); } catch { /* nothing open */ }
+cleanup(ROOT);
 process.exitCode = fail === 0 ? 0 : 1;

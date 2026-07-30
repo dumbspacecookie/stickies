@@ -1,15 +1,16 @@
 // Auto-sync: verifies the opt-in gate and that maybeAutoSync() (used by the hooks)
 // pushes on one machine and pulls on another. Offline — local bare repo as "remote".
 import { spawnSync } from 'node:child_process';
-import { rmSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { closeDb } from '../src/db.js';
 import { createSticky, getSticky } from '../src/store.js';
 import { maybeAutoSync, autoSyncEnabled } from '../src/git-sync.js';
+import { scratchDir, cleanup } from './_env.mjs';
 
-const ROOT = join(tmpdir(), 'stickies_autosync');
-rmSync(ROOT, { recursive: true, force: true });
+// Own directory per run: this file wiped a FIXED root at startup, so a concurrent run deleted
+// the other's bare remote between a push and the pull that checks it arrived.
+const ROOT = scratchDir('autosync');
 mkdirSync(ROOT, { recursive: true });
 const REMOTE = join(ROOT, 'remote.git');
 const WA = join(ROOT, 'A');
@@ -65,4 +66,5 @@ check(b2 && b2.steps?.some((s) => s === 'commit: nothing changed'), `re-sync is 
 
 console.log('\n' + (fail === 0 ? 'AUTO-SYNC OK' : fail + ' FAILURES'));
 closeDb();
+cleanup(ROOT);
 process.exitCode = fail === 0 ? 0 : 1;

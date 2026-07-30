@@ -1,13 +1,17 @@
 // Red-team PoCs. Each prints PASS (defended) or VULNERABLE with evidence.
 import { rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir, cleanup } from './_env.mjs';
 import { join } from 'node:path';
 
 // Use a private, freshly-wiped temp DB unless the caller pinned one — so `npm test`
 // never touches the real ~/.stickies store. getDb() reads STICKIES_DB lazily, so
 // setting it here (before the first store call below) is sufficient.
+let OWN_ROOT = null; // set only when we made the directory, so we only delete our own
 if (!process.env.STICKIES_DB) {
-  process.env.STICKIES_DB = join(tmpdir(), 'stickies_redteam_npmtest.db');
+  // A fixed filename here meant two concurrent runs shared one database, and the second
+  // reported a false VULNERABLE.
+  OWN_ROOT = scratchDir('redteam');
+  process.env.STICKIES_DB = join(OWN_ROOT, 'redteam.db');
 }
 for (const suffix of ['', '-wal', '-shm']) {
   try { rmSync(process.env.STICKIES_DB + suffix); } catch {}
@@ -144,4 +148,8 @@ console.log('\n[6] Secret redaction coverage');
 }
 
 console.log(`\n${vuln === 0 ? 'ALL DEFENDED' : vuln + ' VULNERABILITY CLASS(ES) FOUND'}`);
+// Take the scratch store with us. This file left one behind per run — nine of them by the time
+// anyone looked — each holding the fixture notes these PoCs write.
+try { (await import('../src/db.js')).closeDb(); } catch { /* nothing open */ }
+if (OWN_ROOT) cleanup(OWN_ROOT);
 process.exit(vuln === 0 ? 0 : 1);

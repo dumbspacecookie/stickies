@@ -108,13 +108,14 @@ ${themeBoot()}
     pips.append(el('span', 'pip', '🟨 ' + s.total));
     c.append(pips);
 
-    if (p.current) {
-      var links = el('div', 'links');
-      var b = el('a', null, 'Flow board →'); b.setAttribute('href', '/board');
-      var n = el('a', null, 'Notes →'); n.setAttribute('href', '/');
-      links.append(b); links.append(n);
-      c.append(links);
-    }
+    // Every project is now openable, not just the launched one — the dashboard serves any
+    // registered project via ?project=, so these deep-link straight to that folder's board.
+    var links = el('div', 'links');
+    var q = p.project_path ? '?project=' + encodeURIComponent(p.project_path) : '';
+    var b = el('a', null, 'Flow board →'); b.setAttribute('href', '/board' + q);
+    var n = el('a', null, 'Notes →'); n.setAttribute('href', '/' + q);
+    links.append(b); links.append(n);
+    c.append(links);
     return c;
   }
 

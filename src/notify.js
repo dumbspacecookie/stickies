@@ -9,6 +9,7 @@
 // still an outbound copy of your notes — that's the deal you opt into by setting the env var.
 
 import { buildBoard } from './flow/board.mjs';
+import { dashboardPort } from './dashboard-port.js';
 
 const ENV_VAR = 'STICKIES_DISCORD_WEBHOOK';
 const TIMEOUT_MS = 3000;
@@ -29,7 +30,7 @@ const EVENT_TITLE = {
 
 // Dashboard deep-link for a note. Clicking lands only on the machine running the
 // dashboard (localhost) — a desk convenience; the card content is what reads anywhere.
-const dashUrl = (id) => `http://127.0.0.1:${process.env.STICKIES_DASHBOARD_PORT || 4317}/#note-${id}`;
+const dashUrl = (id) => `http://127.0.0.1:${dashboardPort()}/#note-${id}`;
 
 let lastPostAt = 0;
 

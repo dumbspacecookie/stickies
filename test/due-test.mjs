@@ -45,7 +45,10 @@ check(c && c.due === null, 'a directive without due: has due === null');
 check(parseDirectives('!!sticky todo :: ship it by due: tomorrow')[0].due === null, 'the word due in prose does not leak in');
 
 // --- capture end to end (real store, temp DB) ---------------------------------
-process.env.STICKIES_DB = (await import('node:path')).join((await import('node:os')).tmpdir(), 'stickies_due_test.db');
+const { scratchDir, cleanup } = await import('./_env.mjs');
+// This run's own DB. On a fixed path a second concurrent run reads back the other's notes.
+const ROOT = scratchDir('due');
+process.env.STICKIES_DB = (await import('node:path')).join(ROOT, 'stickies_due_test.db');
 for (const s of ['', '-wal', '-shm']) { try { (await import('node:fs')).rmSync(process.env.STICKIES_DB + s); } catch {} }
 const { createSticky, readStickies } = await import('../src/store.js');
 
@@ -72,4 +75,6 @@ check(buildStatusline([overdueNote, soonNote], { color: false }).includes('⏰1!
 for (const [ok, m] of checks) console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${m}`);
 const allOk = checks.every(([ok]) => ok);
 console.log('\n' + (allOk ? 'DUE OK' : 'DUE FAILED'));
+try { (await import('../src/db.js')).closeDb(); } catch { /* nothing open */ }
+cleanup(ROOT);
 process.exit(allOk ? 0 : 1);

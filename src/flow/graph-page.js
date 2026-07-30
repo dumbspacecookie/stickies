@@ -7,10 +7,10 @@
 // board -> graph link is owned by board-page.js and is not touched here.
 
 import { themeStyle, themeBoot, themeToggleButton } from './theme.mjs';
+import { switcherStyle, switcherButton, switcherBoot } from './project-switcher.mjs';
 
 export function renderGraphPage({ project }) {
   const proj = String(project || '(global)');
-  const escHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -26,7 +26,7 @@ export function renderGraphPage({ project }) {
   body { margin: 0; font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--ink); }
   header { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 5; }
   header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
-  header .proj { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  /* The project label + switcher are shared — see flow/project-switcher.mjs. */
   header .spacer { flex: 1; }
   header .legend { display: flex; gap: 12px; color: var(--muted); font-size: 11px; }
   header .legend .lg { display: flex; align-items: center; gap: 5px; }
@@ -44,12 +44,14 @@ export function renderGraphPage({ project }) {
   .banner { color: var(--muted); padding: 22px; }
 </style>
 ${themeStyle()}
+${switcherStyle()}
 ${themeBoot()}
+${switcherBoot(proj)}
 </head>
 <body>
 <header>
   <h1>🕸 Flow Graph</h1>
-  <span class="proj">${escHtml(proj)}</span>
+  ${switcherButton(proj)}
   <span class="spacer"></span>
   <span class="legend">
     <span class="lg"><span class="sw todo"></span>To-Do</span>
@@ -155,10 +157,12 @@ ${themeBoot()}
     wrap.append(svg);
   }
 
+  // withProj() and the project switcher come from flow/project-switcher.mjs (injected in
+  // <head>), so the graph fetch and the nav links carry the project through.
   async function load() {
     let data;
     try {
-      const r = await fetch('/api/plan-graph', { cache: 'no-store' });
+      const r = await fetch(withProj('/api/plan-graph'), { cache: 'no-store' });
       data = await r.json();
     } catch { return; }
     render(data);

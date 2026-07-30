@@ -2,6 +2,59 @@
 
 Notable changes to Stickies. Versions follow the npm package `stickies-mcp`.
 
+## 0.13.0 — 2026-07-30
+
+The dashboard grows up. Everything here already existed and had been in daily use privately;
+this release is it becoming part of the published package, with two defaults deliberately
+changed first so that installing a notes plugin doesn't hand you things you didn't ask for.
+
+### Added
+
+- **One dashboard for every project.** It is no longer welded to the folder it was launched
+  from: a header switcher moves between every project you've taken notes in, and each page and
+  API route takes `?project=`. The list is an allowlist built from projects that have notes
+  (dismissed ones count) plus recent sessions; anything outside it is refused rather than
+  silently served as the launch project.
+- **A read gate.** The dashboard serves your notes and planning documents, and loopback is not
+  proof of identity — anything running on your machine is also on `127.0.0.1`. Reads now need an
+  authorized browser: `stickies dashboard --link` prints a URL, opening it sets an `HttpOnly`
+  cookie, and the statusline's Ctrl+click carries one. Links carry a short-lived token derived
+  from the key, never the key itself, so an old link in scrollback is inert. Opt out with
+  `STICKIES_DASHBOARD_AUTH=0`.
+- **`stickies dashboard --stop`**, which asks the dashboard to exit itself rather than signalling
+  a pid — so a stale pidfile naming a recycled pid can't get an unrelated process killed.
+- **`stickies doctor`** — reports the whole setup in one shot: what's running, on what port,
+  whether the installed plugin copy is stale. Paths are abbreviated to `~` so the output is safe
+  to paste into an issue (`--raw` opts out).
+- **Board writeback (opt-in).** With `STICKIES_BOARD_WRITEBACK=1`, dragging a card on `/board`
+  rewrites that phase's `**Status:**` line in `.planning/ROADMAP.md`. Pre-edit copies land in
+  `.flow/roadmap-backups/`, writes are realpath-confined, and a move contradicting the phase's
+  plan checkboxes is refused rather than written.
+- **Optional session autostart** — `STICKIES_DASHBOARD_AUTOSTART=1` has a Claude session bring a
+  dashboard up if none is running, announced once.
+
+### Changed
+
+- **Autostart is off by default.** It was previously on unless you set `=0`. Installing a notes
+  plugin should not put a long-lived HTTP server on your machine that you never asked for and
+  have no reason to look for. The CI/remote-session guard remains, and an explicit opt-in no
+  longer overrides it — that escape hatch made sense when `=1` merely forced the default-on path,
+  but now that `=1` is the only route to a spawn, honouring it there would make the guard
+  unreachable and put a listener on any build agent whose repo exports the variable.
+- **The default port is 7317, not 4317.** 4317 is OpenTelemetry's OTLP gRPC port, so on a machine
+  running a collector the dashboard either lost the bind or the statusline link handed you to
+  somebody else's server. The port also now lives in one module instead of being a bare literal
+  in five, and an out-of-range `STICKIES_DASHBOARD_PORT` falls back to the default instead of
+  becoming `NaN` and being passed to `listen()` as "pick any port".
+
+### Fixed
+
+- A `Host` guard rejects DNS-rebinding attempts before any cookie is consulted.
+- A corrupt or truncated dashboard key file used to be a permanent lockout — the server started
+  healthy and refused everything forever while saying nothing. Keys are now written atomically
+  and an unusable one is replaced.
+- Auth cookies are scoped per port, so two dashboards no longer evict each other's sessions.
+
 ## 0.12.1 — 2026-07-27
 
 A bugfix release. No new features, and nothing here changes how you use the tool — but two of

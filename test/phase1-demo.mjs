@@ -6,10 +6,12 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { spawnSync } from 'node:child_process';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { scratchDir } from './_env.mjs';
 
-const ALPHA = join(tmpdir(), 'stk_demo_alpha');
-const BETA = join(tmpdir(), 'stk_demo_beta');
+// This run's own project folders, so two demos side by side do not narrate each other's notes.
+const ROOT = scratchDir('demo');
+const ALPHA = join(ROOT, 'stk_demo_alpha');
+const BETA = join(ROOT, 'stk_demo_beta');
 mkdirSync(ALPHA, { recursive: true });
 mkdirSync(BETA, { recursive: true });
 

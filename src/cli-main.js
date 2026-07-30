@@ -13,6 +13,8 @@ import { notify, notifyDigest, notifyBoard, isEnabled as notifyEnabled } from '.
 import { exportBoardMd } from './flow/board.mjs';
 import { CATEGORIES, IMPORTANCES } from './db.js';
 import { maybeAutoSync } from './git-sync.js';
+import { normalizeProjectPath } from './store-path.js';
+import { DEFAULT_PORT as DEFAULT_DASHBOARD_PORT } from './dashboard-port.js';
 
 // After a manual mutation, push it if auto-sync is enabled (opt-in, best-effort).
 function autoSyncAfterMutation() {
@@ -184,26 +186,117 @@ program
 program
   .command('dashboard')
   .description('Launch the local web dashboard (loopback only).')
-  .option('-p, --port <n>', 'Port (default 4317).')
+  .option('-p, --port <n>', `Port (default ${DEFAULT_DASHBOARD_PORT}).`)
   .option('--project <path>', 'Project to scope to (defaults to cwd).')
   .option('-d, --detach', 'Run in the background and return immediately.')
   .option('--open', 'Open the dashboard in your browser.')
-  .action((opts) => {
+  .option('--stop', 'Stop the running dashboard (only ever kills one that answers as Stickies).')
+  .option('--link', 'Print an authorized URL for your browser (reads are not open to anything else).')
+  .action(async (opts) => {
+    if (opts.link) {
+      const { dashboardPort } = await import('./dashboard-autostart.js');
+      const { authorizedUrl, authEnabled, readAuthKey } = await import('./dashboard-auth.js');
+      const port = Number(opts.port) || dashboardPort();
+      if (!authEnabled()) {
+        console.log(`http://127.0.0.1:${port}/`);
+        console.error('(STICKIES_DASHBOARD_AUTH=0 — reads are unauthenticated, so no key is needed.)');
+        return;
+      }
+      // No key file means no dashboard has ever run under this STICKIES_HOME. Minting one here
+      // would hand back a link that the server then refuses, because it reads the key once at
+      // startup — so say what to do instead of printing something that looks right and is not.
+      if (!readAuthKey()) {
+        console.error('No dashboard key yet — start one first (`stickies dashboard --detach`), then ask again.');
+        process.exitCode = 1;
+        return;
+      }
+      console.log(authorizedUrl(port, '/'));
+      console.error('Valid for a few minutes. Opening it sets a cookie, which is what lasts; the token then leaves the address bar.');
+      return;
+    }
+    if (opts.stop) {
+      const { stopDashboard, dashboardPort } = await import('./dashboard-autostart.js');
+      // dashboardPort(), not a hardcoded 4317: STICKIES_DASHBOARD_PORT is documented, and the
+      // autostart hook, doctor and the statusline link all honour it — so hardcoding here meant
+      // that setting the variable as documented left `--stop` unable to find your own dashboard.
+      const port = Number(opts.port) || dashboardPort();
+      const r = await stopDashboard({ port });
+      const say = {
+        stopped: `Stopped the Stickies dashboard on port ${port} (pid ${r.pid}).`,
+        'not-running': `Nothing is listening on port ${port} — no dashboard to stop.`,
+        foreign: `Port ${port} is held by something that isn't Stickies. Left it alone.`,
+        'unknown-pid': `The dashboard on port ${port} didn't report a pid, so it wasn't safe to kill.`,
+        unverified: `Something on port ${port} answers as Stickies, but ${r.reason}. Not killing it — check with \`stickies doctor\`, or stop it yourself (pid ${r.pid}).`,
+        'still-running': `Asked the dashboard on port ${port} (pid ${r.pid}) to stop, but it's still answering.`,
+        failed: `Could not stop the dashboard on port ${port}: ${r.error}`,
+      }[r.status] || `Unexpected result: ${r.status}`;
+      if (r.status === 'stopped' || r.status === 'not-running') console.log(say);
+      else { console.error(say); process.exitCode = 1; }
+      return;
+    }
     const dash = join(HERE, 'dashboard.js');
     const args = ['--disable-warning=ExperimentalWarning', dash];
-    const port = opts.port || '4317';
+    const { dashboardPort } = await import('./dashboard-autostart.js');
+    const port = String(opts.port || dashboardPort());
+    // Normalized so the ?project= we print is byte-identical to the path the dashboard stores
+    // and matches against — a raw Windows cwd would print %5C-escaped backslashes.
+    const project = normalizeProjectPath(opts.project || process.cwd());
     args.push('--port', port);
-    args.push('--project', opts.project || process.cwd());
+    args.push('--project', project);
     if (opts.open) args.push('--open');
 
     if (opts.detach) {
-      const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore' });
-      child.unref();
-      console.log(`Stickies dashboard started in background → http://127.0.0.1:${port}/`);
+      // A detached child has stdio ignored, so if it dies on EADDRINUSE nobody ever sees it.
+      // This used to print "started in background" regardless, while the port kept serving a
+      // DIFFERENT project — the click landed on someone else's board and looked like a bug in
+      // the board. So: check who owns the port first, and confirm we're really up after.
+      const { probeHealth, ensureDashboard } = await import('./dashboard-autostart.js');
+      const existing = await probeHealth(Number(port));
+      if (existing === 'foreign') {
+        console.error(`Port ${port} is in use by something that isn't Stickies. Pick another with --port <n>.`);
+        process.exit(1);
+      }
+      if (existing) {
+        // One dashboard serves every project, so an existing instance is a success, not a clash.
+        console.log(
+          `Stickies dashboard already running → http://127.0.0.1:${port}/board?project=${encodeURIComponent(project)}\n` +
+          `  (launched from ${existing.project || '(global view)'}; it serves any project via ?project=)`
+        );
+        return;
+      }
+      const r = await ensureDashboard({ project, port: Number(port), confirmMs: 4000, force: true });
+      if (r.status === 'started') {
+        console.log(`Stickies dashboard started in background → http://127.0.0.1:${port}/board?project=${encodeURIComponent(project)}`);
+      } else if (r.status === 'starting') {
+        console.log(`Stickies dashboard starting in background (not answering yet) → http://127.0.0.1:${port}/`);
+      } else {
+        console.error(`Could not start the dashboard (${r.status}${r.error ? ': ' + r.error : ''}).`);
+        process.exit(1);
+      }
       return;
     }
     const child = spawn(process.execPath, args, { stdio: 'inherit' });
     child.on('exit', (code) => process.exit(code || 0));
+  });
+
+// stickies doctor — "why isn't this working". Read-only; see src/doctor.js for why each
+// check exists (each one maps to something that was once silently broken).
+program
+  .command('doctor')
+  .description('Diagnose the local setup: dashboard, plugin install, statusline, store, sync.')
+  .option('--project <path>', 'Project to evaluate (defaults to cwd).')
+  .option('--json', 'Emit the report as JSON.')
+  .option('--raw', 'Show full paths instead of abbreviating your home directory to ~.')
+  .action(async (opts) => {
+    const { runDoctor, renderDoctor, redactReport } = await import('./doctor.js');
+    const report = await runDoctor({ project: opts.project || process.cwd() });
+    // Both forms are safe to paste into an issue by default — pasting the JSON is the natural
+    // thing to do when a maintainer asks. --raw is the one opt-out, for debugging your own box.
+    console.log(opts.json
+      ? JSON.stringify(opts.raw ? report : redactReport(report), null, 2)
+      : renderDoctor(report, { raw: opts.raw }));
+    // Non-zero only for outright breakage, so warnings stay usable in scripts.
+    if (!report.ok) process.exitCode = 1;
   });
 
 // stickies status — one-line summary for a shell prompt or any statusline.

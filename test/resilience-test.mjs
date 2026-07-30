@@ -3,11 +3,16 @@
 import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { writeFileSync, rmSync, readdirSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { closeDb } from '../src/db.js';
 import { createSticky, readStickies } from '../src/store.js';
+import { scratchDir, cleanup } from './_env.mjs';
+
+// Own directory per run. This file swept the WHOLE shared temp dir for `stickies_corrupt.db*`
+// before starting, so a concurrent run had its quarantine file deleted mid-assertion — and the
+// "corrupt file preserved" check then measured whichever run got there last.
+const ROOT = scratchDir('resilience');
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 let fail = 0;
@@ -16,9 +21,9 @@ const wipe = (p) => { for (const s of ['', '-wal', '-shm']) { try { rmSync(p + s
 
 // ── 1. A corrupt DB file is quarantined and the tool keeps working ──────────
 {
-  const p = join(tmpdir(), 'stickies_corrupt.db');
+  const p = join(ROOT, 'stickies_corrupt.db');
   // remove any prior quarantine files too
-  for (const f of readdirSync(tmpdir())) if (f.startsWith('stickies_corrupt.db')) { try { rmSync(join(tmpdir(), f)); } catch {} }
+  for (const f of readdirSync(ROOT)) if (f.startsWith('stickies_corrupt.db')) { try { rmSync(join(ROOT, f)); } catch {} }
   writeFileSync(p, 'this is definitely not a sqlite database, just junk bytes');
   closeDb();
   process.env.STICKIES_DB = p;
@@ -27,7 +32,7 @@ const wipe = (p) => { for (const s of ['', '-wal', '-shm']) { try { rmSync(p + s
   try { rows = readStickies({ project_path: '/x' }); } catch (e) { threw = e.message; }
   check(threw === null, `corrupt DB does not throw on open (${threw || 'ok'})`);
   check(Array.isArray(rows) && rows.length === 0, 'fresh store usable after quarantine');
-  const quarantined = readdirSync(tmpdir()).some((f) => f.startsWith('stickies_corrupt.db.corrupt-'));
+  const quarantined = readdirSync(ROOT).some((f) => f.startsWith('stickies_corrupt.db.corrupt-'));
   check(quarantined, 'corrupt file preserved (renamed to .corrupt-*)');
   // and the fresh DB actually works for writes
   const s = createSticky({ content: 'after corruption recovery', category: 'todo', project_path: '/x' });
@@ -36,7 +41,7 @@ const wipe = (p) => { for (const s of ['', '-wal', '-shm']) { try { rmSync(p + s
 
 // ── 2. A row with corrupt tags JSON must not break reads ────────────────────
 {
-  const p = join(tmpdir(), 'stickies_badtags.db');
+  const p = join(ROOT, 'stickies_badtags.db');
   wipe(p);
   closeDb();
   process.env.STICKIES_DB = p;
@@ -55,7 +60,7 @@ const wipe = (p) => { for (const s of ['', '-wal', '-shm']) { try { rmSync(p + s
 
 // ── 3. busy_timeout is set so concurrent access waits instead of failing ────
 {
-  const p = join(tmpdir(), 'stickies_busy.db');
+  const p = join(ROOT, 'stickies_busy.db');
   wipe(p);
   closeDb();
   process.env.STICKIES_DB = p;
@@ -67,7 +72,7 @@ const wipe = (p) => { for (const s of ['', '-wal', '-shm']) { try { rmSync(p + s
 
 // ── 4. Two processes migrating the SAME old-schema DB at once both succeed ───
 await (async () => {
-  const p = join(tmpdir(), 'stickies_race.db');
+  const p = join(ROOT, 'stickies_race.db');
   wipe(p);
   // Build an OLD-schema DB (no project_key) so both children try to migrate.
   const old = new DatabaseSync(p);
@@ -92,4 +97,5 @@ await (async () => {
 
 console.log('\n' + (fail === 0 ? 'RESILIENCE OK' : fail + ' FAILURES'));
 closeDb();
+cleanup(ROOT);
 process.exitCode = fail === 0 ? 0 : 1;

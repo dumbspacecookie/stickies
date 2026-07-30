@@ -2,15 +2,16 @@
 // resolve to the same project_key, so a project-scoped note written on machine A shows
 // under machine B's project view after sync — despite different filesystem paths.
 import { spawnSync } from 'node:child_process';
-import { rmSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { closeDb } from '../src/db.js';
 import { createSticky, readStickies, upsertFromSync, exportAllRows } from '../src/store.js';
 import { deriveProjectKey, _clearCache } from '../src/project-key.js';
+import { scratchDir, cleanup } from './_env.mjs';
 
-const ROOT = join(tmpdir(), 'stickies_pk');
-rmSync(ROOT, { recursive: true, force: true });
+// Own directory per run: this file wiped a FIXED root at startup, so a concurrent run deleted
+// the other's git checkouts mid-test.
+const ROOT = scratchDir('pk');
 mkdirSync(ROOT, { recursive: true });
 const REMOTE = join(ROOT, 'remote.git');
 const WA = join(ROOT, 'alpha-checkout');   // machine A working copy
@@ -53,4 +54,5 @@ check(!stillB.some((s) => s.content === 'unrelated note'), 'unrelated project no
 
 console.log('\n' + (fail === 0 ? 'PROJECT KEY OK' : fail + ' FAILURES'));
 closeDb();
+cleanup(ROOT);
 process.exitCode = fail === 0 ? 0 : 1;

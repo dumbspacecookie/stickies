@@ -9,7 +9,7 @@
 // fight over the same sqlite file.
 
 import { createServer } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -64,6 +64,19 @@ export function cleanup(dir, attempts = 8) {
     }
   }
   return false;
+}
+
+// Read routes need proof of being the user (src/dashboard-auth.js). A suite drives them with the
+// key header rather than a cookie: same check, no redirect to follow. `home` is the suite's
+// STICKIES_HOME — the key file lives there, written by the dashboard at startup, so this must be
+// called AFTER the server is up.
+export function authHeaders(home, extra = {}) {
+  try {
+    const key = readFileSync(join(home, 'dashboard-auth.key'), 'utf8').trim();
+    return { 'x-stickies-key': key, ...extra };
+  } catch {
+    return { ...extra }; // no key yet: let the assertion fail loudly rather than silently skipping
+  }
 }
 
 // A synchronous pause, so cleanup() can stay callable from the end of a script and from a

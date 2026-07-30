@@ -9,6 +9,9 @@
 
 import { buildBoard } from './board.mjs';
 import { resolveStatuslineTheme, statuslinePalette } from '../statusline.js';
+import { normalizeProjectPath } from '../store-path.js';
+import { authorizedUrl } from '../dashboard-auth.js';
+import { dashboardPort } from '../dashboard-port.js';
 
 const ESC = '\x1b[';
 const BOLD = `${ESC}1m`;
@@ -86,11 +89,20 @@ async function main() {
 
   // Whole segment becomes a Ctrl+click hyperlink to the board (same as stickies).
   // Skipped under tmux (mangles OSC 8) and with --no-link (pass --no-link if OSC 8
-  // interferes with select-to-copy in your terminal); needs the dashboard running.
+  // interferes with select-to-copy in your terminal).
+  //
+  // ?project= is what makes the click honest. The counts above are computed from THIS
+  // terminal's cwd, but one dashboard serves the whole machine — so a bare /board link
+  // opened whichever project happened to launch the server, showing another folder's plans
+  // under this folder's numbers. Naming the project makes the page match the segment.
   const linkable = line && !flag('--no-link') && !process.env.TMUX;
   if (linkable) {
-    const port = process.env.STICKIES_DASHBOARD_PORT || 4317;
-    const url = `http://127.0.0.1:${port}/board`;
+    const port = dashboardPort();
+    // Normalized so the link is byte-identical to the path the dashboard stores and echoes
+    // back (forward slashes, upper-case drive letter) — the server would normalize a raw
+    // Windows path anyway, but a stable URL keeps browser history and bookmarks from forking.
+    // Carries the read key, same as the stickies segment — see src/dashboard-auth.js.
+    const url = authorizedUrl(port, `/board?project=${encodeURIComponent(normalizeProjectPath(projectPath) || '')}`);
     process.stdout.write(`\x1b]8;;${url}\x1b\\${line}\x1b]8;;\x1b\\`);
   } else {
     process.stdout.write(line);

@@ -2,18 +2,23 @@
 //   1. todos never expire — an unfinished task must not vanish on a timer
 //   2. `global` on a directive files the note across every project, not just this one
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseDirectives } from '../src/directives.js';
+import { scratchDir, cleanup } from './_env.mjs';
 
-const db = join(tmpdir(), 'stickies_todoglobal_test.db');
+// This run's own directory: fixed names in the shared temp dir mean two concurrent runs share
+// one sqlite file, and a "global note reaches project B" assertion can then be satisfied by the
+// OTHER run's note.
+const ROOT = scratchDir('todoglobal');
+const db = join(ROOT, 'stickies_todoglobal_test.db');
 for (const s of ['', '-wal', '-shm']) { try { rmSync(db + s); } catch {} }
 const env = { ...process.env, STICKIES_DB: db };
 
-const projA = join(tmpdir(), 'todoglobal_projA');
-const projB = join(tmpdir(), 'todoglobal_projB');
-const transcript = join(tmpdir(), 'todoglobal_transcript.jsonl');
+const projA = join(ROOT, 'todoglobal_projA');
+const projB = join(ROOT, 'todoglobal_projB');
+for (const p of [projA, projB]) mkdirSync(p, { recursive: true });
+const transcript = join(ROOT, 'todoglobal_transcript.jsonl');
 
 const checks = [];
 const check = (label, ok) => checks.push([label, ok]);
@@ -76,4 +81,6 @@ check('non-todo categories still expire (TTL not broken globally)', typeof decis
 for (const [label, ok] of checks) console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}`);
 const allOk = checks.every(([, ok]) => ok);
 console.log('\n' + (allOk ? 'TODO/GLOBAL OK' : 'TODO/GLOBAL FAILED'));
+try { (await import('../src/db.js')).closeDb(); } catch { /* nothing open */ }
+cleanup(ROOT);
 process.exit(allOk ? 0 : 1);

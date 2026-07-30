@@ -7,8 +7,9 @@
 
 import { relativeTime } from './relative-time.mjs';
 import { themeStyle, themeBoot, themeToggleButton } from './theme.mjs';
+import { switcherStyle, switcherButton, switcherBoot } from './project-switcher.mjs';
 
-export function renderBoardPage({ project }) {
+export function renderBoardPage({ project, writeback = false, token = null }) {
   const proj = String(project || '(global)');
   return `<!doctype html>
 <html lang="en">
@@ -23,9 +24,13 @@ export function renderBoardPage({ project }) {
   }
   * { box-sizing: border-box; }
   body { margin: 0; font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--ink); }
-  header { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  /* flex-wrap, because the header carries a title, a project button, a source label, a rollup,
+     a filter, two toggles and three nav links. Without it, a merely narrow window (a half-screen
+     1100px, or 900px) pushed the nav links off the right edge with no way to reach them. */
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; row-gap: 8px; padding: 14px 20px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 5; }
   header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
-  header .proj { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  /* The project label + switcher are shared across /, /board and /graph — see
+     flow/project-switcher.mjs for their styles. */
   header .spacer { flex: 1; }
   header .src { color: var(--muted); font-size: 11px; }
   a.nav { color: var(--muted); text-decoration: none; border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; font-size: 12px; }
@@ -135,14 +140,57 @@ export function renderBoardPage({ project }) {
   .doc-body table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 12px; }
   .doc-body th, .doc-body td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; }
   .doc-body hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+  /* Writeback affordances. Only rendered when writeback is enabled, so the grab cursor never
+     promises a drag that the server would refuse. */
+  .card.draggable { cursor: grab; }
+  .card.dragging { opacity: .45; }
+  /* The card does not move until the write and the re-derive both land, so without this a drop
+     looks like nothing happened and the user drags again. */
+  /* Absolutely positioned so the label cannot reflow the column: it appears exactly when the
+     user is watching for feedback, and growing the card 22px jolts every card below it. */
+  .card.pending { opacity: .55; outline: 1px dashed var(--muted); outline-offset: -3px; position: relative; }
+  .card.pending::after { content: 'saving…'; position: absolute; right: 8px; bottom: 6px;
+                         font-size: 11px; color: var(--muted); background: var(--panel); padding: 0 4px; }
+  /* …and the column the card is heading FOR gets the cue too, because that is where the eyes
+     are after a drop. */
+  .col.awaiting { outline: 2px solid var(--doing); outline-offset: -6px; }
+  .col.dropzone { outline: 2px dashed var(--doing); outline-offset: -6px; }
+  /* Keyboard/touch route to a move: HTML5 drag fires on neither. */
+  .movebar { display: flex; align-items: center; gap: 6px; padding: 12px 18px 0; }
+  .movebar .lbl { color: var(--muted); font-size: 11px; }
+  .movebar button { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 7px;
+                    padding: 3px 10px; font-size: 12px; cursor: pointer; }
+  .movebar button:hover:not([aria-disabled="true"]) { border-color: var(--muted); }
+  .movebar button[aria-disabled="true"] { color: var(--muted); cursor: default; }
+  .movebar button:focus-visible { outline: 2px solid var(--todo); outline-offset: 2px; }
+  /* Toast: writeback can succeed, succeed-with-a-caveat, or be refused because the move would
+     not survive a re-derive. All three have to be sayable. */
+  /* left/right + margin-inline rather than left:50% + translateX: with an auto width the latter
+     caps the shrink-to-fit width at (viewport - left), i.e. 50vw, so on a phone a three-line
+     warning became a 195px-wide, 516px-tall column covering the board. Capped height too — a
+     toast that cannot be scrolled past is worse than one that is cut off. */
+  .toast { position: fixed; bottom: 20px; left: 16px; right: 16px; margin-inline: auto; max-width: 620px;
+           width: fit-content; max-height: 60vh; overflow-y: auto;
+           background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--todo);
+           border-radius: 10px; padding: 12px 16px; font-size: 13px; box-shadow: 0 8px 28px rgba(0,0,0,.4);
+           z-index: 40; }
+  .toast.warn { border-left-color: var(--doing); }
+  .toast.err { border-left-color: var(--blocker, #ef6f6c); }
+  .toast.refused { border-left-color: var(--doing); }
+  .toast .glyph { margin-right: 8px; font-weight: 700; }
+  .toast.warn .glyph, .toast.refused .glyph { color: var(--doing); }
+  .toast.err .glyph { color: var(--blocker, #ef6f6c); }
+  .toast .close { float: right; margin-left: 12px; background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; }
 </style>
 ${themeStyle()}
+${switcherStyle()}
 ${themeBoot()}
+${switcherBoot(proj)}
 </head>
 <body>
 <header>
   <h1>📋 Flow Board</h1>
-  <span class="proj" id="projLabel">${proj.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))}</span>
+  ${switcherButton(proj)}
   <span class="src" id="src"></span>
   <span class="rollup" id="rollup" hidden>
     <span class="rbar"><span id="rollupFill"></span></span>
@@ -169,11 +217,17 @@ ${themeBoot()}
     <button class="drawer-close" id="drawerClose" type="button" aria-label="Close">×</button>
   </div>
   <div class="drawer-meta" id="drawerMeta" hidden></div>
+  <div class="movebar" id="moveBar" hidden></div>
   <div class="tabs" id="tabs"></div>
   <div class="doc" id="docBody"></div>
 </aside>
 
 <script>
+  // withProj() and the project switcher come from flow/project-switcher.mjs, injected in
+  // <head> so it is defined before this block runs.
+  const WRITEBACK = ${writeback ? 'true' : 'false'};
+  const WB_TOKEN = ${JSON.stringify(token)};
+
   function el(tag, cls, text) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -321,7 +375,7 @@ ${themeBoot()}
     body.append(el('div', 'doc-note', 'Loading…'));
     let data;
     try {
-      const r = await fetch('/api/phase-doc?path=' + encodeURIComponent(doc.path), { cache: 'no-store' });
+      const r = await fetch(withProj('/api/phase-doc?path=' + encodeURIComponent(doc.path)), { cache: 'no-store' });
       data = await r.json();
     } catch { data = null; }
     clear(body);
@@ -334,10 +388,45 @@ ${themeBoot()}
     body.append(wrap);
   }
 
+  // Drag-and-drop is the only route to a status change, and HTML5 DnD fires on neither a
+  // keyboard nor a touchscreen — so on a phone, or without a mouse, writeback is unreachable.
+  // These buttons are that route, and they call the same moveCard() the drop handler does.
+  function renderMoveBar(card) {
+    const host = document.getElementById('moveBar');
+    if (!host) return;
+    clear(host);
+    if (!WRITEBACK) { host.hidden = true; return; }
+    host.hidden = false;
+    host.append(el('span', 'lbl', 'Move to'));
+    for (const [key, label] of COLS) {
+      const here = key === card.column;
+      const b = el('button', null, (here ? '✓ ' : '') + label);
+      b.type = 'button';
+      if (here) {
+        // aria-disabled, not the disabled attribute: a disabled button leaves the tab order, so
+        // a keyboard user tabbing this row saw two buttons and never learned their own column.
+        b.setAttribute('aria-disabled', 'true');
+        b.setAttribute('aria-current', 'true');
+        b.classList.add('here');
+        b.title = 'This phase is already here';
+        b.onclick = () => {};
+      } else {
+        b.onclick = () => { closeDrawer(); moveCard(card.phase, card.id, key); };
+      }
+      host.append(b);
+    }
+  }
+
+  // Where focus was when the drawer opened, so it can go back there. Without this, closing left
+  // focus on a now-hidden button and the next Tab restarted at the top of the page.
+  let DRAWER_OPENER = null;
+
   function openDrawer(card, targetDoc) {
+    DRAWER_OPENER = document.activeElement;
     document.getElementById('drawerTitle').textContent =
       (card.phase ? card.phase + ' — ' : '') + (card.title || '');
     renderDrawerMeta(card);
+    renderMoveBar(card);
     const tabs = document.getElementById('tabs');
     const body = document.getElementById('docBody');
     clear(tabs); clear(body);
@@ -357,12 +446,23 @@ ${themeBoot()}
       selectDoc(want, tabs);
     }
     document.getElementById('backdrop').hidden = false;
-    document.getElementById('drawer').hidden = false;
+    const drawer = document.getElementById('drawer');
+    drawer.hidden = false;
+    // Move focus INTO the drawer. Without this it stayed on the card behind the backdrop, so
+    // reaching the Move-to buttons cost one Tab per remaining card — about forty on a real
+    // roadmap, which is "reachable" only in the most theoretical sense.
+    const first = drawer.querySelector('.movebar button:not([aria-disabled="true"]), .tab, #drawerClose');
+    if (first) first.focus();
   }
 
   function closeDrawer() {
     document.getElementById('drawer').hidden = true;
     document.getElementById('backdrop').hidden = true;
+    // Hand focus back to whatever opened it, not to the top of the document.
+    if (DRAWER_OPENER && DRAWER_OPENER.isConnected) {
+      try { DRAWER_OPENER.focus(); } catch { /* the card was re-rendered; leave focus alone */ }
+    }
+    DRAWER_OPENER = null;
   }
 
   // ---- Cards ----------------------------------------------------------------------------
@@ -371,6 +471,22 @@ ${themeBoot()}
     const d = el('div', 'card');
     d.tabIndex = 0;
     d.setAttribute('role', 'button');
+    if (WRITEBACK) {
+      // The phase id is what the writeback API matches against the ROADMAP heading.
+      d.dataset.phase = c.id;
+      d.dataset.column = c.column;
+      d.draggable = true;
+      d.classList.add('draggable');
+      d.addEventListener('dragstart', (e) => {
+        // Resolved at drag time, not build time: the card is only in the DOM by now, and in the
+        // Columns layout there is no lane at all (undefined = "any column may accept me").
+        const lane = d.closest('.lane');
+        DRAGGING = { phase: c.id, from: c.column, phaseLabel: c.phase, lane: lane ? lane.dataset.wave : undefined };
+        d.classList.add('dragging');
+        try { e.dataTransfer.setData('text/plain', c.id); e.dataTransfer.effectAllowed = 'move'; } catch { /* older browsers */ }
+      });
+      d.addEventListener('dragend', () => { d.classList.remove('dragging'); DRAGGING = null; });
+    }
     d.append(el('div', 'phase', c.phase));
     d.append(el('div', 'title', c.title || ''));
     if (c.progress && c.progress.total) {
@@ -483,7 +599,7 @@ ${themeBoot()}
     return d;
   }
 
-  function column(key, label, items) {
+  function column(key, label, items, laneWave) {
     const col = el('div', 'col ' + key);
     const head = el('div', 'col-head');
     head.append(el('span', 'dot'));
@@ -492,12 +608,50 @@ ${themeBoot()}
     col.append(head);
     if (!items.length) col.append(el('div', 'empty-col', '—'));
     for (const c of items) col.append(cardEl(c));
+    if (WRITEBACK) {
+      // Both layouts build their columns here, so wiring the drop target once covers Columns
+      // and Swimlanes alike.
+      // In Swimlanes each lane renders its own three columns, but a lane is decided by plan
+      // wave metadata — which writeback does not touch. Accepting a drop into another lane's
+      // column would promise a destination this move cannot deliver: the card would come back
+      // in its original lane. Only this card's own lane may accept it.
+      const accepts = () => DRAGGING && DRAGGING.from !== key
+        && (DRAGGING.lane === undefined || DRAGGING.lane === String(laneWave));
+      col.addEventListener('dragover', (e) => {
+        if (!accepts()) return; // a no-op drop, or a cross-lane one, is not a drop
+        e.preventDefault();
+        col.classList.add('dropzone');
+      });
+      // dragleave fires every time the pointer crosses onto a child card; without this guard the
+      // dashed outline strobes as you move across the column.
+      col.addEventListener('dragleave', (e) => {
+        if (!col.contains(e.relatedTarget)) col.classList.remove('dropzone');
+      });
+      col.addEventListener('drop', (e) => {
+        e.preventDefault();
+        col.classList.remove('dropzone');
+        if (!accepts()) {
+          // A cross-lane drop is refused with no dropzone and no cursor change, which is
+          // indistinguishable from a board that simply does not work. Say why.
+          if (DRAGGING && DRAGGING.from !== key) {
+            toast('warn', 'A card can only move between the columns of its own wave — lanes come from plan metadata, which the board does not edit.');
+          }
+          DRAGGING = null;
+          return;
+        }
+        const d = DRAGGING;
+        DRAGGING = null; // cleared here too: render() skips while this is set, and relying on
+                         // dragend alone means one missed event freezes the board for good
+        moveCard(d.phaseLabel, d.phase, key);
+      });
+    }
     return col;
   }
 
   // One horizontal wave lane holding the three status columns, scoped to this lane's cards.
   function laneEl(k, cols) {
     const lane = el('div', 'lane');
+    lane.dataset.wave = String(k); // read at dragstart so a drop cannot cross lanes
     const head = el('div', 'lane-head');
     head.append(el('span', 'lane-name', k === null ? 'No wave' : 'Wave ' + k));
     let total = 0;
@@ -511,7 +665,7 @@ ${themeBoot()}
     head.append(el('span', 'lane-count', String(total)));
     lane.append(head);
     const grid = el('div', 'lane-grid');
-    for (const [key, label] of COLS) grid.append(column(key, label, per[key]));
+    for (const [key, label] of COLS) grid.append(column(key, label, per[key], k));
     lane.append(grid);
     return lane;
   }
@@ -519,6 +673,10 @@ ${themeBoot()}
   // Draw the current BOARD in the active layout. No fetch here — pure client-side render, so the
   // layout toggle (and, in Task 2, the filter) re-draw from already-fetched data.
   function render() {
+    // The 5s poll rebuilds every card. Held mid-drag that destroys the node under the cursor:
+    // the board reflows and the "which card am I holding" cue disappears. The drop still lands,
+    // but nothing about it looks deliberate — so skip the redraw until the gesture ends.
+    if (DRAGGING) return;
     const data = BOARD;
     const board = document.getElementById('board');
     board.innerHTML = ''; // one-time container clear (the only innerHTML in this file)
@@ -556,17 +714,142 @@ ${themeBoot()}
       board.style.display = 'grid';
       for (const [key, label] of COLS) board.append(column(key, label, (cols[key] || []).filter(matches)));
     }
+    // Every card was just rebuilt, which drops the pending class — and setPending(id,false) then
+    // has nothing to clear. Without this, toggling layout or typing in the filter while a write
+    // is in flight silently removes the only sign that anything is happening.
+    if (PENDING) setPending(PENDING.phase, true, PENDING.column);
   }
 
   async function load() {
     let data;
     try {
-      const r = await fetch('/api/board', { cache: 'no-store' });
+      const r = await fetch(withProj('/api/board'), { cache: 'no-store' });
       data = await r.json();
     } catch { return; }
     BOARD = data; // cards read board-level provenance (source, generatedAt) from here
     render();
   }
+
+  // --- Writeback -------------------------------------------------------------------------
+  let DRAGGING = null;
+
+  // Every toast leads with a glyph and an outcome clause, because the four kinds are otherwise
+  // distinguished only by the colour of a 4px stripe — and a warning used to REPLACE the
+  // sentence saying the write happened, so a successful move read as a rejection.
+  const TOAST_GLYPH = { ok: '✓', warn: '⚠', refused: '⛔', err: '✗' };
+
+  function toast(kind, text) {
+    const old = document.getElementById('toast');
+    if (old) old.remove();
+    const t = el('div', 'toast' + (kind && kind !== 'ok' ? ' ' + kind : ''));
+    t.id = 'toast';
+    t.setAttribute('role', 'status');       // announced to a screen reader…
+    t.setAttribute('aria-live', 'polite');  // …without interrupting what it is reading
+    const x = el('button', 'close', '×');
+    x.setAttribute('aria-label', 'Dismiss');
+    x.onclick = () => t.remove();
+    t.append(x);
+    const glyph = el('span', 'glyph', TOAST_GLYPH[kind || 'ok'] || '');
+    glyph.setAttribute('aria-hidden', 'true'); // else a screen reader reads "check mark" first
+    t.append(glyph);
+    t.append(el('span', null, text)); // textContent — server text is never markup here
+    document.body.append(t);
+    // A refusal and an error stay until dismissed — both are things the user must read. A
+    // success is transient; a success carrying a caveat sits in between.
+    if (kind !== 'err' && kind !== 'refused') {
+      setTimeout(() => { if (t.isConnected) t.remove(); }, kind === 'warn' ? 9000 : 3500);
+    }
+  }
+
+  const COL_LABEL = { todo: 'To-Do', doing: 'Doing', done: 'Done' };
+
+  // One move at a time. Until this clears, drops are ignored: the card does not move until the
+  // write and the re-derive both land, so an impatient second drag used to fire a second POST
+  // whose toast then erased the first one's — including a refusal the user never got to read.
+  let PENDING = null; // { phase, column } while a write is in flight
+
+  // No selector string, so no escaping question and nothing that can throw: a phase id comes from
+  // a ROADMAP heading, and one containing a quote made the naive selector a SyntaxError. That
+  // threw from OUTSIDE moveCard's try, which left PENDING latched and silently killed every
+  // later drag on the page.
+  function setPending(phaseId, on, column) {
+    for (const card of document.querySelectorAll('.card')) {
+      if (card.dataset.phase === phaseId) card.classList.toggle('pending', !!on);
+    }
+    // Cue the DESTINATION column too: after a drop the user is looking at where the card is
+    // going, not at the column it left.
+    for (const col of document.querySelectorAll('.col')) {
+      col.classList.toggle('awaiting', !!on && !!column && col.classList.contains(column));
+    }
+  }
+
+  async function moveCard(phaseLabel, phaseId, column) {
+    if (PENDING) {
+      // Silence is what made the user drag twice in the first place; do not answer the second
+      // drag with more of it.
+      toast('warn', 'Still saving the last move — one at a time.');
+      return;
+    }
+    PENDING = { phase: phaseId, column };
+    try {
+      await doMove(phaseLabel, phaseId, column);
+    } finally {
+      // Whatever happened — a throw in render, a broken response — the lock is released. A
+      // latched PENDING silently ignores every later drag, which is worse than any single
+      // failed move.
+      PENDING = null;
+      setPending(phaseId, false, column);
+    }
+  }
+
+  async function doMove(phaseLabel, phaseId, column) {
+    setPending(phaseId, true, column);
+    let res, data;
+    try {
+      res = await fetch(withProj('/api/board/status'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-stickies-token': WB_TOKEN },
+        body: JSON.stringify({ phase: phaseId, column }),
+      });
+      data = await res.json();
+    } catch (e) {
+      toast('err', 'Could not reach the dashboard to write that change.');
+      return; // the lock is released by moveCard's finally, on every path
+    }
+    if (!res.ok || !data.ok) {
+      // Key off WHICH 403 this is. "403 with no reason" was too broad a test: an unregistered
+      // project answers {error:'unknown project'} and a disabled feature answers
+      // {error:'writeback disabled', detail}, neither of which is fixed by reloading — and the
+      // second one discards the detail that tells you the switch to set.
+      if (data.error === 'forbidden') {
+        // The token is minted per dashboard process and baked into this page. Reads are ungated,
+        // so a tab left open across a restart keeps polling and looks perfectly healthy right up
+        // until the first drag — at which point the raw word "forbidden" is a useless answer.
+        toast('err', 'This page is out of date — the dashboard restarted since you opened it. Reload the page, then move the card again.');
+        return;
+      }
+      if (data.reason) {
+        // A refusal is informative, not a failure to hide: writeback declines moves the board
+        // would re-derive differently, and says why. It is styled apart from a transport error
+        // because one is the system working correctly and the other is a fault.
+        toast('refused', phaseLabel + ': ' + data.reason);
+        await load();
+        return;
+      }
+      // Anything else — unknown project, writeback disabled, a 500 — is a fault, not a refusal.
+      toast('err', data.detail || data.error || 'The move could not be written.');
+      await load();
+      return;
+    }
+    await load(); // re-derive from the file we just wrote, never from an optimistic guess
+    const moved = data.changed === false
+      ? phaseLabel + ' was already ' + COL_LABEL[column] + '.'
+      : phaseLabel + ' → ' + COL_LABEL[column] + ' (written to ROADMAP.md)';
+    // A caveat never replaces the outcome — it is appended to it.
+    if (data.warnings && data.warnings.length) toast('warn', moved + ' — but: ' + data.warnings.join(' '));
+    else toast('ok', moved);
+  }
+
 
   const LAYOUTS = { columns: 'tColumns', swimlanes: 'tSwimlanes' };
   function setLayout(v) {

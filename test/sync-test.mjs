@@ -1,14 +1,17 @@
 // Offline sync-engine tests: two DBs = two machines, one process (switch via closeDb).
 import { rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { closeDb } from '../src/db.js';
 import { createSticky, readStickies, dismissSticky, getSticky, exportAllRows, upsertFromSync } from '../src/store.js';
 import { buildExport, applyImport, exportToFile, importFromFile } from '../src/sync.js';
+import { scratchDir, cleanup } from './_env.mjs';
 
-const A = join(tmpdir(), 'stickies_sync_A.db');
-const B = join(tmpdir(), 'stickies_sync_B.db');
-const SYNCFILE = join(tmpdir(), 'stickies_sync_doc.json');
+// "Two machines" must be two machines belonging to THIS run. On fixed paths a second concurrent
+// run is a third machine writing into both of them.
+const ROOT = scratchDir('sync');
+const A = join(ROOT, 'stickies_sync_A.db');
+const B = join(ROOT, 'stickies_sync_B.db');
+const SYNCFILE = join(ROOT, 'stickies_sync_doc.json');
 for (const p of [A, B, SYNCFILE]) for (const s of ['', '-wal', '-shm']) { try { rmSync(p + s); } catch {} }
 
 function machine(path) {
@@ -65,4 +68,5 @@ check(upsertFromSync({ id: 'z', category: 'bogus', importance: 'P1', updated_at:
 
 console.log('\n' + (fail === 0 ? 'SYNC ENGINE OK' : fail + ' FAILURES'));
 closeDb();
+cleanup(ROOT);
 process.exitCode = fail === 0 ? 0 : 1;

@@ -84,7 +84,10 @@ for (const key of ['dim', 'red', 'yellow']) {
 // board icon (📋) but NOT the stickies icon (🟨) — the latter would only appear if the
 // import re-triggered the stickies renderer.
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
-const regDb = join(tmpdir(), 'stickies_statusline_regression.db');
+// Under a directory of this run's own: on a fixed name two concurrent runs share the store, and
+// "the store HAS a hot P1" stops being a fact this test established.
+const regRoot = mkdtempSync(join(tmpdir(), 'stickies_slreg_'));
+const regDb = join(regRoot, 'stickies_statusline_regression.db');
 // Hermetic board fixture — a temp project with its own .planning/ROADMAP.md, so the test does
 // not depend on THIS repo tracking .planning (the public repo gitignores it, so repoRoot has no
 // board there). The flow statusline code still comes from repoRoot/src.
@@ -104,8 +107,25 @@ const res = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning'
 const flowOut = (res.stdout || '').split('\n')[0];
 ok(flowOut.includes('\u{1F4CB}'), 'flow statusline renders the board segment (sanity)');
 ok(!flowOut.includes('\u{1F7E8}'), 'flow statusline does NOT leak a stickies render (main() guarded on import)');
+
+// The Ctrl+click target must name THIS terminal's project. One dashboard serves the whole
+// machine, so a bare /board link opened whichever folder launched the server — these counts
+// with a different project's plans underneath. The link has to carry ?project= or the segment
+// and the page it opens disagree.
+ok(flowOut.includes('?project=' + encodeURIComponent(regProj.replace(/\\/g, '/'))),
+  'flow statusline link is scoped to the rendered project (?project=)');
+
+// Same contract for the notes segment.
+const slRes = spawnSync(process.execPath,
+  ['--disable-warning=ExperimentalWarning', join(repoRoot, 'src', 'statusline.js'), '--project', regProj],
+  { input: '{}', encoding: 'utf8', env: { ...process.env, STICKIES_DB: regDb } });
+const slOut = (slRes.stdout || '').split('\n')[0];
+ok(slOut.includes('?project=' + encodeURIComponent(regProj.replace(/\\/g, '/'))),
+  'stickies statusline link is scoped to the rendered project (?project=)');
+
 rmSync(regProj, { recursive: true, force: true });
 for (const s of ['', '-wal', '-shm']) { try { rmSync(regDb + s); } catch {} }
+rmSync(regRoot, { recursive: true, force: true });
 
 console.log(fail ? `\nstatusline: ${fail} FAILED` : `\nstatusline: all ${pass} passed`);
 process.exit(fail ? 1 : 0);

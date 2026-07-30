@@ -1,17 +1,22 @@
 // Tests the Stop hook end-to-end against a synthetic transcript, incl. dedup.
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { scratchDir, cleanup } from './_env.mjs';
 
-const db = join(tmpdir(), 'stickies_autocap_test.db');
+// A directory of this run's own, not fixed names in the shared temp dir. Two runs at once (two
+// terminals, a CI matrix on one runner) otherwise fight over the same sqlite file and the same
+// transcript, and the loser fails with counts that make no sense.
+const ROOT = scratchDir('autocap');
+const db = join(ROOT, 'stickies_autocap_test.db');
 for (const s of ['', '-wal', '-shm']) { try { rmSync(db + s); } catch {} }
 // Blank the developer's real sync vars: otherwise the hook's post-capture maybeAutoSync()
 // pulls the real note repo into this temp DB and dedup/counts drift run-to-run.
 const env = { ...process.env, STICKIES_DB: db, STICKIES_AUTO_SYNC: '', STICKIES_SYNC_REPO: '', STICKIES_SYNC_FILE: '' };
 
-const cwd = join(tmpdir(), 'autocap_proj');
-const transcript = join(tmpdir(), 'autocap_transcript.jsonl');
+const cwd = join(ROOT, 'autocap_proj');
+mkdirSync(cwd, { recursive: true });
+const transcript = join(ROOT, 'autocap_transcript.jsonl');
 
 // A realistic transcript: user msg, an assistant tool-use turn, then final assistant text.
 const lines = [
@@ -45,3 +50,8 @@ for (const s of got) console.log(`  [${s.importance} ${s.category}] ${s.content}
 
 const ok = got.length === 2 && got.some((s) => s.category === 'decision') && got.some((s) => s.category === 'todo');
 console.log('\n' + (ok ? 'AUTO-CAPTURE OK' : 'AUTO-CAPTURE FAILED'));
+try { (await import('../src/db.js')).closeDb(); } catch { /* nothing open */ }
+cleanup(ROOT);
+// This file printed AUTO-CAPTURE FAILED and exited 0, so `npm test` walked straight past it —
+// the Stop hook, end to end, was effectively unguarded.
+process.exit(ok ? 0 : 1);

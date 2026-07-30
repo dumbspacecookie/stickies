@@ -4,6 +4,7 @@
 
 import { relativeTime } from './flow/relative-time.mjs';
 import { themeStyle, themeBoot, themeToggleButton } from './flow/theme.mjs';
+import { switcherStyle, switcherButton, switcherBoot } from './flow/project-switcher.mjs';
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -28,7 +29,7 @@ export function renderPage({ token, project, categories, importances }) {
   body { margin: 0; font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--ink); }
   header { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 5; }
   header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
-  header .proj { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  /* The project label + switcher are shared — see flow/project-switcher.mjs. */
   header .spacer { flex: 1; }
   .toggle { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 3px; }
   .toggle button { background: transparent; color: var(--muted); border: 0; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
@@ -115,12 +116,14 @@ export function renderPage({ token, project, categories, importances }) {
   .lane-head .orig { margin-left: 4px; }
 </style>
 ${themeStyle()}
+${switcherStyle()}
 ${themeBoot()}
+${switcherBoot(project || '(global)')}
 </head>
 <body>
 <header>
   <h1>🟡 Stickies</h1>
-  <span class="proj" id="projLabel">${escapeHtml(project || '(global)')}</span>
+  ${switcherButton(project || '(global)')}
   <span class="spacer"></span>
   <div class="toggle">
     <button id="tProject" class="active">This project</button>
@@ -155,6 +158,9 @@ ${themeBoot()}
 
 <script>
   const TOKEN = ${JSON.stringify(token)};
+  // withProj() and the project switcher come from flow/project-switcher.mjs, injected in
+  // <head> so it is defined before this block runs. Reads, the create form, and the nav links
+  // all carry the project through it — drop it and they silently act on the launch project.
   // view: 'project' (this folder) | 'all' (grouped by folder) | 'session' (grouped by session)
   let view = 'project';
 
@@ -357,7 +363,7 @@ ${themeBoot()}
   async function load() {
     // Session and folder views both need every project's notes; "this project" doesn't.
     const scopeAll = view !== 'project';
-    const r = await fetch('/api/stickies?all=' + (scopeAll ? '1' : '0'), { cache: 'no-store' });
+    const r = await fetch(withProj('/api/stickies?all=' + (scopeAll ? '1' : '0')), { cache: 'no-store' });
     const data = await r.json();
     ALLNOTES = data.stickies; // resolve [[wikilinks]] against the full fetched set
     const grid = document.getElementById('grid');
@@ -531,7 +537,7 @@ ${themeBoot()}
     if (!content) return;
     const tags = document.getElementById('tags').value.split(',').map((t) => t.trim()).filter(Boolean);
     const due = document.getElementById('due').value.trim();
-    const res = await fetch('/api/create', {
+    const res = await fetch(withProj('/api/create'), {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-stickies-token': TOKEN },
       body: JSON.stringify({
