@@ -48,7 +48,7 @@ const warned = (r, name) => said(r.out, '!', name);
 
 // A minimal tree that the gate is happy with, so that a later assertion about ONE broken thing is
 // about that thing and nothing else.
-function makeFixture(dir, { version = '1.0.0', manifestVersion = version } = {}) {
+function makeFixture(dir, { version = '1.0.0', manifestVersion = version, registryVersion = version } = {}) {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(join(dir, 'src'), { recursive: true });
   mkdirSync(join(dir, 'test'), { recursive: true });
@@ -64,6 +64,12 @@ function makeFixture(dir, { version = '1.0.0', manifestVersion = version } = {})
     name: 'fixture', version, scripts: { test: 'node test/sample-test.mjs' },
   }, null, 2));
   writeFileSync(join(dir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'fixture', version: manifestVersion }, null, 2));
+  // The MCP registry manifest carries the version twice, and both are written from the same
+  // knob here so a test can move them out of step with package.json the way the real repo did.
+  writeFileSync(join(dir, 'server.json'), JSON.stringify({
+    name: 'io.github.fixture/fixture', version: registryVersion,
+    packages: [{ registryType: 'npm', identifier: 'fixture', version: registryVersion }],
+  }, null, 2));
   cpSync(join(REPO, '.githooks', 'pre-push'), join(dir, '.githooks', 'pre-push'));
 }
 
@@ -216,14 +222,36 @@ try {
     check(/cached by version/.test(r.out) || /reach nobody/.test(r.out),
       'and says why it matters: an installed plugin is cached by version');
 
-    // Bumping both manifests is the way out.
+    // Bumping ALL THREE manifests is the way out.
+    const writeRegistry = (v) => writeFileSync(join(V, 'server.json'), JSON.stringify({
+      name: 'io.github.fixture/fixture', version: v,
+      packages: [{ registryType: 'npm', identifier: 'fixture', version: v }],
+    }, null, 2));
     writeFileSync(join(V, 'package.json'), JSON.stringify({
       name: 'fixture', version: '1.0.1', scripts: { test: 'node test/sample-test.mjs' },
     }, null, 2));
     writeFileSync(join(V, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'fixture', version: '1.0.1' }, null, 2));
+    writeRegistry('1.0.1');
     r = gate(V);
     check(passed(r, 'version bumped since the last release'), 'bumping the version clears it');
-    check(passed(r, 'version agreement'), 'and the two manifests still have to agree');
+    check(passed(r, 'version agreement'), 'and the three manifests still have to agree');
+
+    // The MCP registry manifest is the third one, and it was checked by nobody: shipping 0.14.0
+    // with a server.json that still said 0.13.0 is the state this repo was actually in.
+    writeRegistry('1.0.0');
+    r = gate(V);
+    check(failed(r, 'version agreement'), 'a stale server.json FAILS, rather than publishing the wrong release to the registry');
+    check(/server\.json version = 1\.0\.0/.test(r.out), 'and the failure names the field that is stale');
+
+    // Its SECOND version field is a separate place to rot, so it is asserted separately.
+    writeFileSync(join(V, 'server.json'), JSON.stringify({
+      name: 'io.github.fixture/fixture', version: '1.0.1',
+      packages: [{ registryType: 'npm', identifier: 'fixture', version: '1.0.0' }],
+    }, null, 2));
+    r = gate(V);
+    check(failed(r, 'version agreement'), 'a stale version INSIDE packages[] fails too');
+    check(/packages\[0\]\.version = 1\.0\.0/.test(r.out), 'and it is named by its path');
+    writeRegistry('1.0.1');
 
     // The original check, still doing its job.
     writeFileSync(join(V, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'fixture', version: '1.0.0' }, null, 2));

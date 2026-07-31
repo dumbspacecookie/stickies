@@ -278,11 +278,27 @@ if (args.has('--no-tests')) {
 {
   const pkg = JSON.parse(read(join(ROOT, 'package.json')));
   const manifestPath = join(ROOT, '.claude-plugin', 'plugin.json');
+  // THREE manifests, not two. server.json is what the MCP registry reads, and it carries the
+  // version TWICE — once at the top level and once inside the npm package entry. It was checked by
+  // nobody: at 0.14.0 both of its versions still said 0.13.0, so the registry would have advertised
+  // a release that no longer existed while package.json and plugin.json agreed perfectly and the
+  // gate went green. A check that covers two of the three files is how the third one rots.
+  const registryPath = join(ROOT, 'server.json');
+  const registryVersions = existsSync(registryPath) ? (() => {
+    const s = JSON.parse(read(registryPath));
+    return [['server.json version', s.version], ...(s.packages || [])
+      .map((p, i) => [`server.json packages[${i}].version`, p.version])];
+  })() : [];
+  const registryStale = registryVersions.filter(([, v]) => v !== pkg.version);
+
   if (!existsSync(manifestPath)) warn('version agreement', 'no .claude-plugin/plugin.json');
   else {
     const manifest = JSON.parse(read(manifestPath));
     if (manifest.version !== pkg.version) {
       fail('version agreement', `package.json ${pkg.version} != plugin.json ${manifest.version} — hook changes will not reach an installed copy`);
+    } else if (registryStale.length) {
+      fail('version agreement',
+        `package.json ${pkg.version}, but the MCP registry manifest disagrees — publishing would advertise the wrong release:\n      ${registryStale.map(([k, v]) => `${k} = ${v}`).join('\n      ')}`);
     } else {
       pass(`version agreement (${pkg.version})`);
       // Agreement alone passes two stale-but-equal manifests, which is the exact state this
