@@ -21,6 +21,27 @@ export function parseFrontmatter(text) {
   // Unterminated fence: don't throw — treat the whole thing as body.
   if (end === -1) return { frontmatter: {}, body: src };
 
+  // A leading `---` is not proof of frontmatter. In markdown it is also a horizontal rule, and
+  // plenty of documents open with one. When they did, everything up to the NEXT `---` — the
+  // title, the opening paragraph, whatever a human wrote — was swallowed as frontmatter and
+  // silently vanished from the rendered doc.
+  //
+  // So require it to look like what it claims to be: the first non-blank line inside the fence
+  // must be a `key:` line. That is the whole shape this parser supports, so anything else was
+  // never going to parse into `frontmatter` anyway — it would just disappear. A `# Heading`, a
+  // sentence, or a `- bullet` opening the block means this was a rule, not a fence.
+  let firstMeaningful = null;
+  for (let i = 1; i < end; i++) {
+    if (lines[i].trim() !== '') { firstMeaningful = lines[i]; break; }
+  }
+  // The same character class and the same "no leading whitespace" rule as the key matcher below,
+  // deliberately. A looser gate here would admit a block the parser then reads nothing out of —
+  // and the document would be consumed into an empty `frontmatter` and lost, which is the bug
+  // wearing a different hat. If the parser cannot read it, we do not eat it.
+  const looksLikeFrontmatter =
+    firstMeaningful !== null && /^[A-Za-z0-9_.-]+:(\s|$)/.test(firstMeaningful);
+  if (!looksLikeFrontmatter) return { frontmatter: {}, body: src };
+
   const frontmatter = {};
   let curKey = null; // the key a following "- item" block list attaches to
 
