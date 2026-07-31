@@ -10,6 +10,7 @@
 
 import { buildBoard } from './flow/board.mjs';
 import { dashboardPort } from './dashboard-port.js';
+import { redactAndCap } from './redact.js';
 
 const ENV_VAR = 'STICKIES_DISCORD_WEBHOOK';
 const TIMEOUT_MS = 3000;
@@ -19,6 +20,88 @@ const TIMEOUT_MS = 3000;
 // single POST instead of one POST per note, so the limit is not a practical concern.
 const MIN_INTERVAL_MS = 400;
 const MAX_EMBEDS_PER_POST = 10; // Discord hard limit
+
+// Discord's documented per-field limits. Going over ANY of them is a 400 for the WHOLE request —
+// not a truncated field, the entire post rejected — and every call in this file is best-effort, so
+// the rejection went into a catch nobody reads. Measured: a session report for a deep monorepo
+// path sent a 1674-character `folder` field against a 1024 limit, so that project's reports never
+// arrived once, and there was nothing anywhere to say why.
+const LIMITS = {
+  content: 2000,
+  title: 256,
+  description: 4096,
+  fieldName: 256,
+  fieldValue: 1024,
+  footerText: 2048,
+  authorName: 256,
+  fieldCount: 25,
+};
+
+// Bound and scrub one outbound string. Both jobs, one call, because they were being done
+// separately and each was being forgotten somewhere.
+//
+// redactAndCap, never the hand-rolled cut-then-redact. Cutting first slices a credential in half,
+// and these patterns are anchored, so the fragment matches nothing and is published intact. That
+// exact ordering has been hand-written five times in this codebase; see src/redact.js. (Spelling
+// the wrong call out in prose here is not free either — the gate reads this file as text, and it
+// flagged the comment. Which is the check working: it cannot tell a warning from an instruction.)
+//
+// The `…` is not decoration. A value that hits the cap has lost something, and the failure this
+// whole block exists for was invisible truncation of a path — so when we cut, we say we cut. A
+// value that lands EXACTLY on the cap and was not truncated pays one character for that; the
+// alternative is a caller who cannot tell a complete field from a clipped one.
+function clean(value, cap) {
+  const { text } = redactAndCap(value, cap);
+  return text.length >= cap ? `${text.slice(0, cap - 1)}…` : text;
+}
+
+// Everything Discord will read, bounded and scrubbed, at the single point every post goes through.
+//
+// Per-call-site scrubbing is what produced this bug: `board` is parsed out of the project's
+// ROADMAP.md at send time, so unlike sticky content it never passed through redactSecrets() at
+// write time — and it rides the session report, which fires automatically at SessionEnd. A phase
+// line reading `deploy: AWS_SECRET_ACCESS_KEY=…` went to the channel verbatim. Doing it here
+// instead means a field added later cannot quietly skip it.
+function sanitizeEmbed(embed) {
+  const out = { ...embed };
+  if (embed.title != null) out.title = clean(embed.title, LIMITS.title);
+  if (embed.description != null) out.description = clean(embed.description, LIMITS.description);
+  if (embed.author && embed.author.name != null) {
+    out.author = { ...embed.author, name: clean(embed.author.name, LIMITS.authorName) };
+  }
+  if (embed.footer && embed.footer.text != null) {
+    out.footer = { ...embed.footer, text: clean(embed.footer.text, LIMITS.footerText) };
+  }
+  if (Array.isArray(embed.fields)) {
+    out.fields = embed.fields
+      .map((f) => ({ ...f, name: clean(f.name, LIMITS.fieldName), value: clean(f.value, LIMITS.fieldValue) }))
+      // An EMPTY name or value is rejected exactly as hard as an over-long one, and scrubbing can
+      // empty a field that arrived non-empty. Drop it rather than lose the whole post for it.
+      .filter((f) => f.name && f.value)
+      .slice(0, LIMITS.fieldCount);
+  }
+  return out;
+}
+
+function sanitizeBody(body) {
+  const out = { ...body };
+  if (body.content != null) out.content = clean(body.content, LIMITS.content);
+  if (Array.isArray(body.embeds)) out.embeds = body.embeds.slice(0, MAX_EMBEDS_PER_POST).map(sanitizeEmbed);
+  return out;
+}
+
+// A rejected post must not vanish. Best-effort is the right policy for the SEND — a webhook that
+// is down must never fail a sticky write — but best-effort had become silent: the failure was
+// stringified into a return value that every caller ignores, so "my session reports stopped
+// arriving" had no trace on any surface. One line on stderr costs nothing when the webhook is
+// healthy and is the whole difference when it is not.
+function reportFailure(error) {
+  try {
+    process.stderr.write(`stickies: discord post failed — ${error}\n`);
+  } catch {
+    // stderr can be closed on a detached hook; losing the notice must not raise here of all places
+  }
+}
 
 const COLORS = { P1: 0xe5534b, P2: 0xd9a441, P3: 0x8b949e };
 const BAND = { P1: '🔴', P2: '🟡', P3: '⚪' };
@@ -108,13 +191,38 @@ async function post(url, body) {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify(sanitizeBody(body)),
       signal: ctl.signal,
+      // The host allowlist in parseWebhook() is checked against the URL we ASK for. With the
+      // default `redirect: 'follow'` the server gets to replace that URL, and fetch will carry
+      // the body — your notes — to whatever host a 302 names, with nothing in this file able to
+      // see it happen. The allowlist has to hold on the socket that actually carries the payload,
+      // so a redirect is an error here, not an instruction. Discord's webhook endpoint does not
+      // redirect; anything that does is not the thing we agreed to talk to.
+      redirect: 'error',
     });
-    if (!res.ok) return { ok: false, error: `discord responded ${res.status}` };
+    if (!res.ok) {
+      // Discord's 400 body names the offending field — "embeds.0.fields.0.value: Must be 1024 or
+      // fewer in length" — which is the one sentence worth having. Best-effort: a proxy, or a
+      // stub, may hand us no readable body at all.
+      let detail = '';
+      try {
+        detail = String((await res.text()) || '').replace(/\s+/g, ' ').slice(0, 300);
+      } catch {
+        // no body to read; the status alone still says more than nothing
+      }
+      const error = `discord responded ${res.status}${detail ? ` — ${detail}` : ''}`;
+      reportFailure(error);
+      return { ok: false, error };
+    }
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: err?.name === 'AbortError' ? 'timed out' : String(err?.message || err) };
+    // A blocked redirect arrives as a bare "fetch failed"; the reason ("unexpected redirect")
+    // lives on .cause, and dropping it turns the one interesting failure into the generic one.
+    const cause = err?.cause?.message ? ` (${err.cause.message})` : '';
+    const error = err?.name === 'AbortError' ? 'timed out' : `${String(err?.message || err)}${cause}`;
+    reportFailure(error);
+    return { ok: false, error };
   } finally {
     clearTimeout(timer);
   }
@@ -177,7 +285,15 @@ function boardField(projectPath) {
     if (shipped && shipped.total) return `${label} ✓ ${shipped.done}/${shipped.total}`;
     return `${label} …`;
   };
-  const tokens = cards.map(token);
+  // Scrubbed HERE as well as in sanitizeEmbed, and not only for belt-and-braces: the greedy fit
+  // below counts characters, and redaction changes them. `AWS_SECRET_ACCESS_KEY=…` in a phase
+  // title is longer or shorter once it becomes `AWS_SECRET_ACCESS_KEY=[REDACTED]`, so measuring
+  // the raw text and scrubbing afterwards would produce a field that is either over the limit or
+  // truncated in the middle of the marker. Scrub first, then measure what will really be sent.
+  //
+  // A per-phase cap as well, because one absurd ROADMAP heading should cost its own phase its
+  // detail, not swallow the whole field's budget and hide every other phase behind "+N more".
+  const tokens = cards.map((c) => clean(token(c), 240));
 
   // Greedily include phases; if we can't fit them all, close with "+N more" and stay under
   // Discord's 1024-char field-value cap (reserve a little room for the suffix).
