@@ -1,0 +1,4 @@
+# The pre-push hook is executed by /bin/sh. A CRLF checkout makes the shebang `#!/bin/sh`,
+# which POSIX sh does not recognise — the hook then silently does not run, and the silence is
+# the whole problem. Force LF regardless of the platform that checks it out.
+.githooks/** text eol=lf

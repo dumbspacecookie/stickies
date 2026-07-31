@@ -1,0 +1,16 @@
+# Dev-only code must never reach the published package.
+#
+# `package.json`'s "files" list includes all of src/, which meant the apprentice feature — marked
+# DEV-ONLY in its own header and deliberately absent from the public tree — sat inside every
+# tarball `npm pack` produced. The public repo has a guard test that fails if these files are
+# ported there; nothing checked the npm path, which is the one that reaches users directly.
+#
+# `scripts/gate.mjs` check 8 now runs `npm pack --dry-run` and fails if any file whose header says
+# DEV-ONLY appears in the manifest, so this list and that check keep each other honest: delete a
+# line here and the gate goes red.
+src/apprentice.js
+src/apprentice-themes.js
+src/apprentice-page.js
+
+# Never publish the gate's own scratch state or the review stamp.
+.flow/
