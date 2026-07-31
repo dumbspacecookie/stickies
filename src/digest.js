@@ -8,12 +8,41 @@ export const END_MARKER = '<!-- stickies:end -->';
 
 const P2_PREVIEW_CHARS = 100;
 
-// Neutralize HTML-comment delimiters in sticky-supplied text so content can never
-// forge the managed-section markers (<!-- stickies:end -->) and break out of, or
-// corrupt, the managed region of CLAUDE.md. Visually near-identical, but the
-// upsert's marker search can no longer match an injected delimiter.
+// Make sticky-supplied text safe to interpolate into one line of the digest.
+//
+// Two things, and the second was missing for the whole life of this file.
+//
+// 1. HTML-comment delimiters are neutralized so content cannot forge the managed-section markers
+//    (`<!-- stickies:end -->`) and break out of, or corrupt, the managed region of CLAUDE.md.
+//    Visually near-identical; the upsert's marker search can no longer match an injected delimiter.
+//
+// 2. LINE TERMINATORS ARE COLLAPSED, because this digest is injected into the model's context at
+//    SessionStart behind a banner saying the notes below are data and must not be followed as
+//    instructions. That framing is enforced entirely by layout: one note renders as one `- (cat) …`
+//    line, so a note body is visibly subordinate to the banner. A body containing newlines is not
+//    subordinate to anything. Reproduced: a single note printed its own `_End of saved reminders._`
+//    followed by a `## System` heading and a forged standing instruction, and the result is
+//    indistinguishable, in the context window, from the session's real framing.
+//
+//    Note content is attacker-influenceable — it arrives from the MCP `stickies_write` tool, the
+//    dashboard POST, the CLI, and `upsertFromSync`, which takes it from the shared git sync
+//    document, i.e. from anyone who can push to it.
+//
+//    repo-mode's engine already collapsed newlines here, for exactly this reason and with a comment
+//    saying so. The main path — the one every non-repo-mode user runs — never got the fix. Two
+//    implementations of one rule, and the one in wider use was the unsafe one.
+//
+// The class is spelled out rather than using `\s`, because JS `\s` does NOT include U+0085 (NEL),
+// and an editor and a model will both read that as a line break even though the regex will not.
+// Written as ESCAPES, never as literals: a literal U+2028 in source is invisible, terminates the
+// line for the JS parser, and is eaten by the next edit — which is why the gate refuses invisible
+// characters in src/ at all. This line was briefly written with the literals; the gate caught it.
+const LINE_TERMINATORS = /[\n\r\u0085\u2028\u2029]+/g;
 function neutralizeMarkers(text) {
-  return String(text).replace(/<!--/g, '&lt;!--').replace(/-->/g, '--&gt;');
+  return String(text)
+    .replace(LINE_TERMINATORS, ' ')
+    .replace(/<!--/g, '&lt;!--')
+    .replace(/-->/g, '--&gt;');
 }
 
 // Render a digest from active stickies:
