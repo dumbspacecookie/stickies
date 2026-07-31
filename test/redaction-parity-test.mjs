@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { redactSecrets } from '../src/redact.js';
+import { redactSecrets, redactAndCap } from '../src/redact.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -110,6 +110,217 @@ for (const [label, secret] of [
 // A truncated key must not survive by hiding behind the length cap either.
 const long = '-----BEGIN OPENSSH PRIVATE KEY-----\n' + 'b3BlbnNzaC1rZXk'.repeat(20);
 check(!redactSecrets(long).text.includes('b3BlbnNzaC1rZXk'), 'no key material survives an unpaired header');
+
+// --- the armored block, which is what people actually paste ---------------------------------
+//
+// A real `gpg --export-secret-keys --armor` starts with a `Version:` or `Comment:` line, and the
+// unpaired-header pattern used to demand base64 IMMEDIATELY after the BEGIN line. So the single
+// most likely paste in the whole corpus — an entire private key, headers and all, too long for
+// its `-----END-----` to be inside the scan window — matched neither pattern and was stored
+// byte-for-byte. The control assertions below are the point: they pin what the OLD pattern did,
+// so these cannot quietly go vacuous if the pattern is loosened again.
+const OLD_UNPAIRED = /-----BEGIN[^-]*PRIVATE KEY(?: BLOCK)?-----[^\S\n]*(?:\r?\n[A-Za-z0-9+/=]{16,}[^\S\n]*)+/;
+// Built, not typed. A literal U+2028 in this file IS a line terminator to the JS parser and
+// renders as nothing in a diff — which is exactly why a key separated by one slipped past the
+// redactor in the first place. The gate refuses these characters in src/; the same reasoning
+// applies to a fixture that has to contain one.
+const LS = String.fromCodePoint(0x2028); // LINE SEPARATOR
+const NEL = String.fromCodePoint(0x0085); // NEXT LINE
+const KEYDATA = 'lQOYBGa1AAEBCADQ8s1QwEyRk9pQ2vN3mB1cF8dWqZm9pQ2vN3mB1cF8dWq';
+for (const [label, secret] of [
+  ['PGP block with a Version: header', `-----BEGIN PGP PRIVATE KEY BLOCK-----\nVersion: GnuPG v2\n\n${KEYDATA}\n${KEYDATA}`],
+  ['PGP block with a Comment: header', `-----BEGIN PGP PRIVATE KEY BLOCK-----\nComment: ash@getcontext.info\n\n${KEYDATA}`],
+  ['PEM with Proc-Type/DEK-Info headers', `-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,1E4A\n\n${KEYDATA}`],
+  ['a key separated by CR alone', `-----BEGIN RSA PRIVATE KEY-----\r${KEYDATA}`],
+  // Escapes, not literals: written literally, U+2028 IS a line terminator to the JS parser and
+  // to a diff viewer, which is exactly how it hides. Same reason the gate refuses them in src/.
+  ['a key separated by U+2028 (LINE SEPARATOR)', `-----BEGIN RSA PRIVATE KEY-----${LS}${KEYDATA}`],
+  ['a key separated by U+0085 (NEL)', `-----BEGIN RSA PRIVATE KEY-----${NEL}${KEYDATA}`],
+  ['CRLF armored block', `-----BEGIN PGP PRIVATE KEY BLOCK-----\r\nVersion: GnuPG v2\r\n\r\n${KEYDATA}\r\n`],
+]) {
+  const out = redactSecrets(secret);
+  check(out.redacted && !out.text.includes(KEYDATA), `main copy redacts: ${label}`);
+  check(!OLD_UNPAIRED.test(secret), `control: the old pattern did NOT match: ${label}`);
+}
+
+// …and the reason it matters: an armored key longer than the scan window, capped for storage.
+// Everything inside the window has to be gone, because everything inside the window is what gets
+// written to disk and synced.
+{
+  const armored =
+    '-----BEGIN PGP PRIVATE KEY BLOCK-----\nVersion: GnuPG v2\n\n' + `${KEYDATA}\n`.repeat(120);
+  const stored = redactAndCap(armored, 2000);
+  check(!stored.text.includes(KEYDATA), 'no key material survives an armored block that outruns the scan window');
+  check(stored.redacted, 'and the store is told that something was redacted');
+}
+
+// The header-only prose case must STILL survive all of that: the closed list of armor header
+// names is what keeps "TODO:" from reading as one.
+for (const [label, prose] of [
+  ['a header followed by TODO: lines', '-----BEGIN EC PRIVATE KEY-----\nTODO: paste the key here\nTODO: rotate it after'],
+  ['a header followed by a Note: line', 'see -----BEGIN OPENSSH PRIVATE KEY-----\nNote: ask Dana, she has the real one'],
+]) {
+  const out = redactSecrets(prose);
+  check(!out.redacted && out.text === prose, `main copy does not eat: ${label}`);
+}
+
+// --- credential shapes that used to pass through byte-for-byte --------------------------------
+//
+// Eleven of them, found by audit. Each is paired with a plausible NON-secret carrying the same
+// prefix, because a redactor that eats `hf_hub_download` out of a note about huggingface is a
+// worse tool than one that misses a token — the note is gone permanently and the user is not told.
+//
+// MAIN ONLY, and that is a known, deliberate divergence rather than an oversight: adding these to
+// src/repo-mode/engine.mjs is a change to a file this work does not own. The inlined copy is
+// listed as behind, loudly, below — which is the whole job of this file.
+//
+// Fourth column is the credential MATERIAL — the part that must be absent from the output. Not
+// `redacted === true`: a pattern that fires on the label and leaves the token beside it reports
+// exactly the same boolean as one that works.
+const AZURE_KEY = 'b'.repeat(86) + '==';
+const NEW_SHAPES = [
+  ['huggingface token', 'hf_' + 'A'.repeat(34), 'use hf_hub_download from huggingface_hub', 'hf_' + 'A'.repeat(34)],
+  ['gitlab pat', 'glpat-' + 'x'.repeat(20), 'glpat-tokens are per-user; see the wiki', 'x'.repeat(20)],
+  ['aws temporary (STS) key id', 'ASIAIOSFODNN7EXAMPLE', 'the ASIAPAC rollout ships in Q3', 'ASIAIOSFODNN7EXAMPLE'],
+  // Split, for the reason stated at the top of this file: written as one literal, GitHub push
+  // protection rejects the push, and the only way through is the "allow the secret" button —
+  // which is the identical click you would make on a real leaked token. The runtime value is
+  // unchanged, so the redactor is still tested on exactly the string it would meet in the wild.
+  ['slack app-level token', 'xapp-' + '1-A0123456789-1234567890123-abcdef', 'xapp-lite is our internal name for it', '1234567890123-abcdef'],
+  ['slack refresh token', 'xoxe-' + '1-My0xLTk5OTk5OTk5OTk5', 'xoxe rotation is documented in the runbook', 'My0xLTk5OTk5OTk5OTk5'],
+  ['google oauth client secret', 'GOCSPX-' + 'a'.repeat(28), 'GOCSPX-prefixed secrets live in the vault', 'a'.repeat(28)],
+  ['fly.io token', 'fm2_' + 'b'.repeat(80), 'fm2_ tokens come from `flyctl auth token`', 'b'.repeat(80)],
+  ['bearer authorization header', 'Authorization: Bearer a1B2c3D4e5F6g7H8i9J0kL', 'Bearer authentication is described in RFC 6750', 'a1B2c3D4e5F6g7H8i9J0kL'],
+  ['azure storage account key', `AccountName=acct;AccountKey=${AZURE_KEY};EndpointSuffix=core.windows.net`, 'the account_key rotation runbook is in Notion', AZURE_KEY],
+];
+const engineBehind = [];
+for (const [label, secret, benign, material] of NEW_SHAPES) {
+  const hit = redactSecrets(secret);
+  check(hit.redacted, `main copy redacts: ${label}`);
+  check(!hit.text.includes(material), `and the credential material itself is gone: ${label}`);
+  const miss = redactSecrets(benign);
+  check(!miss.redacted && miss.text === benign, `and prose with the same prefix is untouched: ${label}`);
+  if (!engineRedact(secret).redacted) engineBehind.push(label);
+}
+// The two shapes that keep their label are worth pinning as text, not as a boolean: the point of
+// handling them where they are handled is that the reader still sees WHICH credential went.
+check(redactSecrets('Authorization: Bearer a1B2c3D4e5F6g7H8i9J0kL').text === 'Authorization: Bearer [REDACTED]',
+  'a bearer header keeps its label and loses only the token');
+check(redactSecrets(`AccountKey=${AZURE_KEY};EndpointSuffix=core.windows.net`).text ===
+  'AccountKey=[REDACTED];EndpointSuffix=core.windows.net',
+  'an azure connection string loses the key and keeps the rest of the string');
+// This was a soft report for its whole first life — it printed the drift and let the suite pass,
+// on the reasoning that the inlined copy was a file the change did not own and a red suite nobody
+// could fix was worse than a loud line. What that actually bought was three releases in which the
+// engine was missing nine token shapes, the armor-header fix and the idempotence guard, while this
+// test printed all nine of them on every single run and `npm test` said PASS. Nobody reads a
+// report inside a green suite. A warning that never fails is a warning that never lands.
+//
+// It is now a hard failure, which it can afford to be: the inlined copy is GENERATED from
+// src/redact.js by scripts/build-engine.mjs, so "nobody can fix it from where they are standing"
+// is no longer true — the fix is one command, and engine-generated-test.mjs names it.
+check(engineBehind.length === 0,
+  engineBehind.length
+    ? `the inlined engine redactor is BEHIND src/redact.js on: ${engineBehind.join(', ')} — run \`node scripts/build-engine.mjs\``
+    : 'the inlined engine redactor catches every shape the canonical one does');
+
+// --- a new pattern must not make the write path slow -------------------------------------------
+//
+// This function runs on every write and inside a post-turn hook, so its cost is a product
+// property, not a detail: the header above already records 14 KB at 818 ms and 130 KB at 17 s from
+// the assignment layer. The bearer pattern reintroduced exactly that. A lookbehind of UNBOUNDED
+// length — `(?<=\bBearer\s+)` — is re-evaluated at every position in the string, and 100 KB of
+// line breaks after a key header measured 4.7 seconds against 1 ms before it existed. Bounding the
+// gap to `[ \t]{1,4}` made each position constant-time. The threshold is deliberately loose: this
+// is here to catch a quadratic, not to police a slow laptop.
+{
+  const hostile = '-----BEGIN RSA PRIVATE KEY-----' + '\n'.repeat(100000);
+  const t0 = Date.now();
+  redactSecrets(hostile);
+  const ms = Date.now() - t0;
+  check(ms < 1000, `100 KB of line breaks after a key header scans in well under a second (${ms} ms)`);
+
+  const prose = 'the quick brown fox Bearer authentication '.repeat(2500);
+  const t1 = Date.now();
+  redactSecrets(prose);
+  const ms2 = Date.now() - t1;
+  check(ms2 < 1000, `100 KB of prose repeatedly saying "Bearer" scans in well under a second (${ms2} ms)`);
+}
+
+// --- redacting twice must not eat the text between the markers -------------------------------
+//
+// Redaction is not a single pass any more: store.js scrubs on the way in, notify.js scrubs again
+// on the way out. Layer 3's bare value runs to the end of the line, so on the second pass
+// `SECRET_TOKEN=[REDACTED] · Phase 2 · Phase 3` read as ONE value and everything after the first
+// marker was replaced by another marker — a board card that arrived with 1 of its 60 phases and
+// nothing to say the other 59 had been eaten. Found by a test asserting the field's own length
+// accounting, not by anything going red on content.
+{
+  const twice = (s) => redactSecrets(redactSecrets(s).text).text;
+  for (const [label, input] of [
+    ['a joined list of labelled phases', 'Phase 1 SECRET_TOKEN=abc · Phase 2 SECRET_TOKEN=def · Phase 3 done'],
+    ['a note whose tail follows a redacted value', 'DB_PASSWORD=hunter2 then restart the box'],
+    ['a quoted json assignment', '"apiKey": "abcdef123456", "region": "eu-west-1"'],
+    ['a connection string', 'postgres://admin:hunter2@db.internal:5432/app and then run the migration'],
+  ]) {
+    const once = redactSecrets(input).text;
+    check(twice(input) === once, `redacting twice changes nothing further: ${label}`, once);
+    check(!redactSecrets(once).redacted, `and a second pass reports nothing new to redact: ${label}`);
+  }
+  // The board path exactly: scrub each phase token FIRST (so one bad label cannot eat its
+  // neighbours — a bare value runs to the end of the LINE, and the joined field is one line),
+  // then join. It is that joined string the outbound scrub sees again, and every phase after the
+  // first is what used to vanish from it.
+  const joined = ['Phase 1 SECRET_TOKEN=abc', 'Phase 2 SECRET_TOKEN=def', 'Phase 3 done']
+    .map((t) => redactSecrets(t).text)
+    .join(' · ');
+  const rescanned = redactSecrets(joined).text;
+  check(rescanned === joined, 'a pre-scrubbed, joined board line survives the outbound scrub intact', rescanned);
+  check(/Phase 2/.test(rescanned) && /Phase 3 done$/.test(rescanned),
+    'control: the phases after the first are still there afterwards');
+}
+
+// --- redactAndCap: the ordering that kept getting written by hand ---------------------------
+//
+// Three call sites had `redactSecrets(x.slice(0, cap))` — cut first, then redact. That ordering
+// slices a credential in half, and these patterns are anchored, so the fragment matches nothing
+// and is stored verbatim. Two more capped BEFORE redacting and stored a value over the cap,
+// because `[REDACTED]` is longer than much of what it replaces. One helper now owns all three
+// steps; these assertions are what stop the hand-rolled versions coming back.
+{
+  const CAP = 500;
+
+  // A credential that STRADDLES the cap: it starts before, its anchor lands after.
+  const straddling =
+    'x'.repeat(CAP - 30) + ' postgres://admin:' + 'S3cretPw'.repeat(4) + '@db.internal/x';
+  const capped = redactAndCap(straddling, CAP);
+  check(!capped.text.includes('S3cretPw'),
+    'redactAndCap: a credential straddling the cap is redacted, not sliced into a live fragment');
+  check(capped.redacted, 'redactAndCap: and it reports that it redacted something');
+  check(capped.text.length <= CAP, 'redactAndCap: the result still respects the cap');
+
+  // Proof the ordering is what does it: cut-then-redact leaks the same input.
+  const naive = redactSecrets(straddling.slice(0, CAP)).text;
+  check(naive.includes('S3cretPw'),
+    'control: the old cut-then-redact ordering DOES leak this fragment (so the test is not vacuous)');
+
+  // Growth past the cap: many short assignments each expand when redacted.
+  let dense = '';
+  for (let i = 0; dense.length < CAP - 14; i++) dense += `token_${i}=abc,`;
+  dense = dense.replace(/,$/, '');
+  const grown = redactAndCap(dense, CAP);
+  check(redactSecrets(dense).text.length > CAP,
+    `control: redaction really does grow this input past the cap (${redactSecrets(dense).text.length} > ${CAP})`);
+  check(grown.text.length <= CAP,
+    `redactAndCap: the stored value is capped after redaction (${grown.text.length} <= ${CAP})`);
+
+  // Nothing surprising for ordinary short text.
+  const plain = redactAndCap('just an ordinary note', CAP);
+  check(plain.text === 'just an ordinary note' && !plain.redacted,
+    'redactAndCap: ordinary text passes through untouched');
+  check(redactAndCap(null, CAP).text === '' && redactAndCap(undefined, CAP).text === '',
+    'redactAndCap: null and undefined become empty, not the strings "null"/"undefined"');
+}
 
 console.log(fail ? `\nredaction-parity: ${fail} FAILED` : '\nredaction-parity: all passed');
 process.exit(fail ? 1 : 0);
