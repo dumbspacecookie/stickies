@@ -19,6 +19,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, rmSync
 import { randomBytes } from 'node:crypto';
 import { join, sep } from 'node:path';
 import { parseRoadmap, classify, COLUMNS } from './derive-gsd.mjs';
+import { fencedLineFlags } from './fences.mjs';
 
 // The word written for each column. Chosen so it round-trips through classify(): 'Planned'
 // matches neither the DONE nor DOING keyword set, 'In progress' matches DOING, 'Complete'
@@ -178,8 +179,13 @@ export function rewriteRoadmapStatus(md, phaseId, column) {
 
   // Locate the phase and the extent of its section.
   const wanted = String(phaseId).toLowerCase();
+  // Same fence rule as the board builder, from the same helper. When these two disagreed, a
+  // fenced example heading was a card on the board but not a heading here (or the reverse), and
+  // the write landed on a different phase's section — silently, reporting success.
+  const fenced = fencedLineFlags(lines);
   const heads = [];
   for (let i = 0; i < lines.length; i++) {
+    if (fenced[i]) continue;
     const m = lines[i].match(HEADING);
     if (m && idOf(m[1]) === wanted) heads.push(i);
   }
@@ -210,7 +216,11 @@ export function rewriteRoadmapStatus(md, phaseId, column) {
 
   let end = lines.length;
   for (let i = head + 1; i < lines.length; i++) {
-    // Any heading at the same or a higher level ends this phase's section.
+    // Any heading at the same or a higher level ends this phase's section — unless it is inside
+    // a code fence, where it is example text. A fenced heading used to cut the section short, so
+    // the real `**Status:**` line fell outside the measured range, the writer took the INSERT
+    // branch, and the phase ended up with two contradicting status lines.
+    if (fenced[i]) continue;
     if (/^#{1,3}\s/.test(lines[i])) { end = i; break; }
   }
 

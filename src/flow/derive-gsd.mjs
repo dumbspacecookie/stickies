@@ -9,6 +9,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseFrontmatter } from './frontmatter.mjs';
+import { fencedLineFlags } from './fences.mjs';
 // NOTE: keep this module dependency-free (only node:fs/node:path + the local dependency-free
 // frontmatter parser) so it can be inlined into repo-mode's self-contained engine later,
 // same as the stickies engine.mjs.
@@ -51,7 +52,14 @@ export function parseRoadmap(md) {
     cards.push(cur);
   };
 
-  for (const line of lines) {
+  // A `### Phase N` heading inside a ```-fence is an EXAMPLE, not a phase. Reading it as one
+  // produced a real draggable card whose move rewrote a different phase's status on disk. The
+  // writer uses this same helper, because a reader and a writer that disagree about what counts
+  // as a heading is exactly how the wrong section gets edited.
+  const fenced = fencedLineFlags(lines);
+  for (let li = 0; li < lines.length; li++) {
+    if (fenced[li]) continue;
+    const line = lines[li];
     const h = line.match(/^###\s+(Phase\s+[\w.]+)\s*[:—-]?\s*(.*)$/i);
     if (h) {
       flush();
