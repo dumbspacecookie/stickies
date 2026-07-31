@@ -15,7 +15,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node --disable-warning=ExperimentalWarning \"${CLAUDE_PLUGIN_ROOT}/src/auto-capture.js\""
+            "command": "node --disable-warning=ExperimentalWarning \"${CLAUDE_PLUGIN_ROOT}/src/auto-capture.js\"",
+            "timeout": 15
           }
         ]
       }
