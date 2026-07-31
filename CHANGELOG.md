@@ -2,6 +2,97 @@
 
 Notable changes to Stickies. Versions follow the npm package `stickies-mcp`.
 
+## 0.14.0 — 2026-07-31
+
+A bug-fix release, and an admission: every defect below shipped in a release whose test suite was
+green. Green is not the bar any more — `npm run gate` is, and it is now armed on push.
+
+### Fixed — data loss
+
+- **Auto-sync no longer commits work you didn't offer it.** The sync commit was a bare
+  `git commit -m …`, which commits **the whole index** — so anything you happened to have staged
+  in the sync repo went out under a "stickies sync" message and was then pushed. A staged and
+  forgotten `.env.local` was enough to publish a credential. The commit is now scoped by pathspec
+  to the sync file alone, and runs `--no-verify`: a `pre-commit` hook doing `git add -A` (a common
+  formatter setup) would otherwise put every other dirty file straight back in.
+- **Auto-sync no longer creates remote branches.** `push -u origin HEAD` on a branch with no
+  upstream *creates* that branch on the remote, so a half-finished WIP branch got published as a
+  side effect of taking a note. Stickies now pushes only to an upstream you configured, and says
+  so plainly when there isn't one. What it still cannot fix, and the docs now say so: git sends a
+  commit with all its ancestors, so unpushed commits of your own beneath ours go too. Use a
+  dedicated sync repo.
+- **A corrupt repo-mode store no longer becomes an empty one.** `loadStore()` caught every error
+  and returned `{ notes: [] }`, so an unreadable or half-written `.stickies/notes.json` read as a
+  board with nothing on it — which was then saved over the real file, committed and pushed. It now
+  refuses to overwrite a store it could not parse.
+- **A note is capped *after* redaction, not before.** The length check ran on the raw text, and
+  `[REDACTED]` is longer than much of what it replaces, so a note under the limit could cross it
+  on the way to disk and lose its tail.
+- **A project note can no longer land in every project.** An unusable `project_path` degraded to a
+  null scope, which means global.
+
+### Fixed — capture
+
+- **A directive in a file you merely read is no longer executed.** `!!sticky …` was honoured
+  anywhere on a line and inside code fences, so a directive quoted in a README, a diff or a web
+  page could write a note — including with the `global` modifier, which escapes the project. A
+  directive is now honoured only at column 0, outside any code fence: the model has to *speak* it,
+  not *quote* it. `STICKIES_NO_GLOBAL_CAPTURE=1` removes the global exception entirely.
+- Control characters are stripped (a NUL truncated the note at rest and defeated dedup), captures
+  are deduped on scope + content + category + importance, **a note you dismissed stays dismissed**
+  instead of returning the next time the model restates it, and a turn is capped at 20 notes with
+  a 15s hook timeout.
+
+### Fixed — secrets
+
+- **Eleven more credential shapes are redacted**: Hugging Face `hf_`, GitLab `glpat-`, AWS temp
+  `ASIA`, Slack `xapp-`/`xoxe`, Google `GOCSPX-`, Fly `fm2_`, Azure `AccountKey=`, and opaque
+  `Bearer` values. Armored PGP blocks terminated with CR or U+0085 are handled.
+- **Redaction is a fixed point.** Running it over already-redacted text was rewriting markers it
+  had itself placed, eating the surrounding characters.
+- **A denial of service in the redactor**: an unbounded lookbehind took 4.7 seconds over 100KB of
+  input, in a function every write path calls. Now bounded — about a millisecond.
+- **The repo-mode engine is generated, not hand-copied.** It carries its own self-contained copy of
+  the redactor, that copy was maintained by hand, and it had drifted **nine credential patterns**
+  behind — a repo-mode user was getting a months-old redactor. It is now built from the real
+  sources and stamped with a content hash, and the gate fails if the two disagree.
+
+### Fixed — the board
+
+- **A `### Phase N` heading inside a code fence became a real, draggable card** — and moving it
+  rewrote a *different* phase's status in `.planning/ROADMAP.md`, silently. The reader and the
+  writer each tracked fences separately and disagreed; they now share one implementation.
+- A leading `---` horizontal rule was parsed as frontmatter and swallowed the document.
+- `snapshotBoard` could write outside the project directory, unlike the containment-checked
+  `backupRoadmap` sitting next to it.
+
+### Fixed — counts
+
+- **One folder is one project again.** On Windows a directory has several stored spellings, and
+  while reads folded them, everything that *counted* did not: the dashboard listed one folder
+  twice with the notes split between the rows, the session report showed you only the notes
+  written under the capitalisation your shell happened to use, and the project switcher offered
+  the same folder twice. (Deliberately a no-op on Linux and macOS, where `/home/A` and `/home/a`
+  really are two directories.)
+
+### Fixed — other
+
+- **`stickies doctor` no longer modifies the store it is inspecting** — a read-only diagnostic was
+  rewriting `status` and `updated_at` on the rows it looked at.
+- `doctor` reports a diverged sync repo instead of printing `✓ Nothing broken` over one.
+- Every Discord embed field is bounded and redirects are refused, so a note can't be truncated
+  into an error or followed off to another host.
+- The session-start digest is size-capped and marked as data rather than instruction.
+
+### Added
+
+- **`npm run gate`** — one command that has to pass before anything leaves the repo: the suite,
+  manifest agreement, dev-only files staying out of the tarball, the inlined engine matching its
+  sources, and push enforcement actually being armed. A `pre-push` hook runs it and refuses when
+  the pushed sha isn't `HEAD` or the tree is dirty, because otherwise the gate reports on code
+  that isn't the code being pushed. `STICKIES_SKIP_GATE=1` is the one documented override; see
+  `GATE.md`.
+
 ## 0.13.0 — 2026-07-30
 
 The dashboard grows up. Everything here already existed and had been in daily use privately;
