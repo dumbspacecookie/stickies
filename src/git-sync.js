@@ -44,6 +44,12 @@ export function resolveSyncRepo() {
 // do. The inheritance only ever runs test→real for AUTO_SYNC/SYNC_REPO, never this.
 export function isScratchDb(dbPath = resolveDbPath()) {
   if (/^(1|true|yes|on)$/i.test(process.env.STICKIES_ALLOW_SCRATCH_SYNC || '')) return false;
+  // A non-path is not a path. `String(null)` is "null", and `resolve("null")` is a RELATIVE
+  // resolution against cwd — so this answered "is the current working directory inside temp?"
+  // instead of "is this DB a scratch DB?". Harmless wherever the process happens to run from
+  // outside temp, which is why it never showed: the assertion that a null path degrades to
+  // not-scratch passed for the wrong reason, and flipped the moment the repo sat in a temp dir.
+  if (typeof dbPath !== 'string' || !dbPath) return false;
   try {
     const norm = (p) => resolve(String(p)).replace(/\\/g, '/').toLowerCase();
     const tmp = norm(tmpdir()).replace(/\/$/, '');
@@ -117,12 +123,42 @@ export function sync({ repo = resolveSyncRepo(), file } = {}) {
   git(repo, ['add', syncFile]);
   const dirty = git(repo, ['status', '--porcelain', '--', syncFile]).out.length > 0;
   if (dirty) {
-    const commit = git(repo, ['commit', '-m', `stickies sync ${new Date().toISOString()}`]);
+    // The pathspec after `--` is load-bearing, not decoration. `add` and `status` above were
+    // already scoped to the sync file, but a bare `git commit` commits THE WHOLE INDEX — so
+    // anything the user happened to have staged in this repo went out under a "stickies sync"
+    // message, and then got pushed. A `.env.local` staged and forgotten is enough to publish a
+    // credential. With the pathspec, the commit contains this one file or it does not happen.
+    // `--no-verify` alongside the pathspec, because the pathspec alone is not enough: a
+    // `pre-commit` hook in the user's own sync repo runs BEFORE the commit is built, and one that
+    // does `git add -A` (a common formatter setup) puts every other dirty file back in — so the
+    // commit that "contains this one file or does not happen" quietly contained a `.env`. We are
+    // not the author of these commits in any meaningful sense; they are bookkeeping, and running
+    // someone's lint-staged over them is neither wanted nor safe.
+    const commit = git(repo, [
+      'commit', '--no-verify', '-m', `stickies sync ${new Date().toISOString()}`, '--', syncFile,
+    ]);
     steps.push(commit.code === 0 ? 'commit: ok' : `commit: failed (${commit.err.split('\n')[0]})`);
     // 5. Push if there is a remote.
     if (remote) {
-      const push = git(repo, ['push', '-u', 'origin', 'HEAD']);
-      steps.push(push.code === 0 ? 'push: ok' : `push: failed (${(push.err || push.out).split('\n')[0]})`);
+      // Push exactly the commit we just made, and nothing else.
+      //
+      // What this fixes: `push -u origin HEAD` on a branch with NO upstream CREATES that branch
+      // on the remote, so a half-finished WIP branch got published as a side effect of taking a
+      // note. We no longer invent an upstream — we say so and stop, because guessing which remote
+      // branch someone meant is not ours to guess.
+      //
+      // What it does NOT fix, and cannot: if the user has unpushed commits of their own beneath
+      // ours, pushing ours pushes theirs too. Git sends a commit with all its ancestors; there is
+      // no refspec that says "just this one". The honest mitigation is a dedicated sync repo,
+      // which is what the docs recommend — not a cleverer push.
+      const upstream = git(repo, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+      if (upstream.code !== 0) {
+        steps.push('push: skipped (no upstream — run `git push -u origin <branch>` once yourself)');
+      } else {
+        const branch = upstream.out.trim().replace(/^origin\//, '');
+        const push = git(repo, ['push', 'origin', `HEAD:${branch}`]);
+        steps.push(push.code === 0 ? 'push: ok' : `push: failed (${(push.err || push.out).split('\n')[0]})`);
+      }
     }
   } else {
     steps.push('commit: nothing changed');
