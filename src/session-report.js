@@ -12,7 +12,7 @@
 
 import { readFileSync, existsSync, rmSync } from 'node:fs';
 import { getDb } from './db.js';
-import { normalizeProjectPath } from './store-path.js';
+import { projectIdentity } from './store-path.js';
 import { notifySessionReport } from './notify.js';
 import { markerPath } from './session-marker.js';
 
@@ -31,16 +31,30 @@ function readStdin() {
 // Everything created, and everything dismissed, inside [since, now] for this project.
 // Scoped to the project so a session in one folder doesn't report another folder's notes.
 export function collectSessionActivity(db, { since, projectPath }) {
-  const np = normalizeProjectPath(projectPath);
+  // The scope test is identity, not string equality on the stored path.
+  //
+  // `project_path = @pp` compares the spelling the hook was handed against the spelling each note
+  // was written with, and on Windows one directory has several. A session that started from a
+  // shell using a different capital reported only the notes written with ITS spelling — twelve
+  // notes in one folder, five in the report — and the ones it dropped were reported by no session
+  // at all. readStickies() has never had this problem because it scopes on project_key, which is
+  // built from projectIdentity(); this query was the aggregate the folding never reached.
+  //
+  // Filtered in JS rather than with SQL LOWER(): SQLite's LOWER is ASCII-only, so as a prefilter
+  // it could EXCLUDE a genuinely matching non-ASCII path, and it would fold on POSIX too, where
+  // /home/A and /home/a are two real directories. One case rule, and it lives in store-path.js.
+  // The window is a single session, so the rows this pulls back are counted in the dozens.
+  const id = projectIdentity(projectPath);
+  const mine = (r) => r.project_path === null || projectIdentity(r.project_path) === id;
 
   const created = db
     .prepare(
       `SELECT * FROM stickies
         WHERE created_at >= @since
-          AND (project_path = @pp OR project_path IS NULL)
         ORDER BY created_at ASC`
     )
-    .all({ since, pp: np });
+    .all({ since })
+    .filter(mine);
 
   // A dismissal is a status flip, so it shows up as an updated_at inside the window on a
   // row that is now dismissed. created_at may well be from a session weeks ago.
@@ -49,10 +63,10 @@ export function collectSessionActivity(db, { since, projectPath }) {
       `SELECT * FROM stickies
         WHERE status = 'dismissed'
           AND updated_at >= @since
-          AND (project_path = @pp OR project_path IS NULL)
         ORDER BY updated_at ASC`
     )
-    .all({ since, pp: np });
+    .all({ since })
+    .filter(mine);
 
   const parse = (r) => ({ ...r, tags: (() => { try { return JSON.parse(r.tags); } catch { return []; } })() });
 

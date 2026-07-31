@@ -10,8 +10,8 @@ import {
   MAX_TAGS,
   MAX_TAG_LENGTH,
 } from './db.js';
-import { redactSecrets } from './redact.js';
-import { normalizeProjectPath, isUnsafeProjectPath } from './store-path.js';
+import { redactSecrets, redactAndCap } from './redact.js';
+import { normalizeProjectPath, isUnsafeProjectPath, projectIdentity, canonicalSpelling } from './store-path.js';
 import { deriveProjectKey } from './project-key.js';
 import { normalizeOrigin } from './origin.js';
 import { resolveDueDate } from './due.js';
@@ -134,8 +134,12 @@ export function createSticky({
 
   // Scrub obvious secrets before they are persisted (and later synced). Tags sync
   // verbatim just like content, so a credential-shaped tag must be redacted too.
-  const { text: safeContent, redacted: contentRedacted } = redactSecrets(content.trim());
-  const safeTags = tags.map((t) => redactSecrets(t).text);
+  // Capped again AFTER redaction. The length check above runs on the raw text, but `[REDACTED]`
+  // is longer than many of the things it replaces — a 496-char note of comma-separated assignments
+  // measured 769 chars once redacted, so a value that passed validation was stored 269 over the
+  // limit the rest of the system relies on.
+  const { text: safeContent, redacted: contentRedacted } = redactAndCap(content.trim(), MAX_CONTENT_LENGTH);
+  const safeTags = tags.map((t) => redactAndCap(t, MAX_TAG_LENGTH).text);
   const redacted = contentRedacted || safeTags.some((t, i) => t !== tags[i]);
 
   const db = getDb();
@@ -233,11 +237,35 @@ export function readStickies({
 //
 // A dismissed note is still evidence that this is a project of yours, which is exactly what the
 // allowlist is asking. No sweepExpired() here either: rebuilding an allowlist should not write.
+// Deliberately NOT folded by project identity, unlike projectSummaries() below.
+//
+// On Windows this can return two spellings of one folder, and its two consumers both want that:
+// project-scope.js uses it as an allowlist and already matches a request by identity, so folding
+// here would only shrink a set that must stay a superset; and the dashboard's project switcher
+// folds it for display at the point where it renders (/api/projects). Folding in all three places
+// would be a rule with two homes and no test that could tell them apart.
 export function registeredProjects() {
   return getDb()
     .prepare('SELECT DISTINCT project_path AS path FROM stickies WHERE project_path IS NOT NULL')
     .all()
     .map((r) => r.path);
+}
+
+// Group values by the identity of their project path — the ONE case rule in this codebase, which
+// is a no-op on POSIX where /home/A and /home/a really are two directories. Returns
+// [{ identity, spellings, items }] in first-seen order.
+function foldByIdentity(items, pathOf) {
+  const byId = new Map();
+  for (const item of items) {
+    const path = pathOf(item);
+    const id = projectIdentity(path);
+    if (!id) continue; // a path that normalizes to nothing was never scopable to begin with
+    const acc = byId.get(id) || { identity: id, spellings: [], items: [] };
+    acc.spellings.push(path);
+    acc.items.push(item);
+    byId.set(id, acc);
+  }
+  return [...byId.values()];
 }
 
 export function projectSummaries() {
@@ -257,85 +285,39 @@ export function projectSummaries() {
         GROUP BY project_path`
     )
     .all();
-  return rows.map((r) => ({
-    project_path: r.path,
-    stickies: { total: r.total, p1: r.p1, p2: r.p2, p3: r.p3, blockers: r.blockers },
-    lastTouched: r.lastTouched || null,
-  }));
+
+  // GROUP BY groups on the stored spelling, which on Windows is not the same thing as grouping by
+  // project. One folder written to from two shells that capitalised the path differently came back
+  // as TWO rows with the counts split between them — twelve notes reported as seven and five — and
+  // the command centre drew a card for each half, each with its own board and its own P1 tally.
+  //
+  // readStickies() never had this problem because it scopes on project_key, which is already built
+  // from projectIdentity(). The folding was on the read path and not on the aggregates. Folded in
+  // JS rather than with SQL LOWER() so there is one case rule and not two: LOWER() is ASCII-only
+  // in SQLite and does nothing on POSIX, where merging /home/A into /home/a would pour one real
+  // project's notes into another's.
+  return foldByIdentity(rows, (r) => r.path).map(({ spellings, items }) => {
+    const sum = (f) => items.reduce((n, r) => n + (r[f] || 0), 0);
+    const lastTouched = items.reduce((m, r) => (r.lastTouched && (!m || r.lastTouched > m) ? r.lastTouched : m), null);
+    return {
+      project_path: canonicalSpelling(spellings),
+      stickies: { total: sum('total'), p1: sum('p1'), p2: sum('p2'), p3: sum('p3'), blockers: sum('blockers') },
+      lastTouched,
+    };
+  });
 }
 
-// Persist a batch of parsed directives, skipping ones that duplicate an existing
-// active sticky (same stored content + same project scope). Used by the post-turn
-// auto-write hook, which may run many times over a session.
-// `items`: [{ category, importance, tags, global, content }]
-// An item marked `global` is stored unscoped (project_path null) so it surfaces in every
-// project, and dedups against other globals rather than against this project's notes.
-export function autoCapture(items, project_path, { origin = 'unknown', session_id = null } = {}) {
-  const db = getDb();
-  // Same rule as createSticky: normalizing an unsafe path yields null, and null means GLOBAL —
-  // so accepting one would file every captured note into every project's digest.
-  if (isUnsafeProjectPath(project_path)) {
-    throw new Error('project_path contains characters that are not valid in a filesystem path');
-  }
-  const np = normalizeProjectPath(project_path);
-  const created = [];
-  let skipped = 0;
-
-  for (const it of items) {
-    const scope = it.global ? null : np;
-
-    // Compute the exact value createSticky will store, so dedup matches reality.
-    //
-    // Length-checked BEFORE redaction, not after. createSticky rejects anything over the cap, so
-    // an over-long directive was going to be refused either way — but redacting first meant the
-    // regexes ran on unbounded text from a transcript, and the assignment lookahead is
-    // catastrophic on `_`-segmented input: a 14KB run measured 818ms, 130KB measured 17s. That is
-    // the post-turn hook, on every turn, driven by whatever text is in the transcript.
-    const rawContent = String(it.content || '').trim();
-    if (rawContent.length > MAX_CONTENT_LENGTH) {
-      skipped++;
-      continue;
-    }
-    const storedContent = redactSecrets(rawContent).text;
-    if (!storedContent) {
-      skipped++;
-      continue;
-    }
-    const dup = db
-      .prepare(
-        `SELECT id FROM stickies
-          WHERE status = 'active' AND content = @content
-            AND ((project_path IS NULL AND @pp IS NULL) OR project_path = @pp)
-          LIMIT 1`
-      )
-      .get({ content: storedContent, pp: scope });
-    if (dup) {
-      skipped++;
-      continue;
-    }
-
-    try {
-      created.push(
-        createSticky({
-          content: it.content,
-          category: it.category,
-          importance: it.importance,
-          tags: it.tags,
-          project_path: scope,
-          source: 'auto',
-          origin,
-          session_id,
-          due_at: it.due, // raw token; createSticky resolves it against now
-        })
-      );
-    } catch {
-      // Malformed directive (e.g. bad category that slipped through) — skip it.
-      skipped++;
-    }
-  }
-
-  return { created, skipped };
-}
+// `autoCapture` used to live here and is deliberately gone.
+//
+// It persisted a batch of parsed directives, and its dedup was the bug: it keyed on content
+// alone and considered only rows with status='active'. So an escalation (`todo P3 :: X` then
+// `blocker P1 :: X`) was silently dropped as a duplicate, and a note you had deliberately
+// DISMISSED came straight back the next time the model restated it.
+//
+// That policy now lives in `src/auto-capture.js`, which calls `createSticky` directly and keys
+// dedup on scope + content + category + importance while remembering dismissals. Leaving the old
+// function here as unreachable code would have been an invitation: the next caller would get the
+// old behaviour back with no warning, because nothing about the name says which one is wrong.
 
 export function getSticky(id) {
   const db = getDb();
@@ -368,7 +350,9 @@ export function upsertFromSync(rec) {
     // Redacted like every other write path. Tags on the next lines already were; content was not,
     // which meant a hand-edited sync file, a peer on an older build, or pre-fix history re-imported
     // raw secrets into the local plaintext store — and every export afterwards re-published them.
-    content: redactSecrets(String(rec.content ?? '').slice(0, MAX_CONTENT_LENGTH)).text,
+    // redactAndCap, not slice-then-redact: a credential straddling MAX_CONTENT_LENGTH used to be
+    // cut before the redactor saw it, so the fragment persisted and every export re-published it.
+    content: redactAndCap(rec.content, MAX_CONTENT_LENGTH).text,
     category: rec.category,
     importance: rec.importance,
     project_path: normalizeProjectPath(rec.project_path),
@@ -376,7 +360,7 @@ export function upsertFromSync(rec) {
     // synced record carry a key that disagreed with the path stored beside it.
     project_key: rec.project_key ?? deriveProjectKey(normalizeProjectPath(rec.project_path)),
     tags: JSON.stringify(
-      (Array.isArray(rec.tags) ? rec.tags.slice(0, MAX_TAGS) : []).map((t) => redactSecrets(String(t)).text)
+      (Array.isArray(rec.tags) ? rec.tags.slice(0, MAX_TAGS) : []).map((t) => redactAndCap(t, MAX_TAG_LENGTH).text)
     ),
     created_at: rec.created_at || nowIso(),
     updated_at: rec.updated_at || nowIso(),
@@ -389,7 +373,12 @@ export function upsertFromSync(rec) {
     session_id: rec.session_id ? String(rec.session_id) : null,
     due_at: normalizeDueAt(rec.due_at),
     status: ['active', 'stale', 'dismissed'].includes(rec.status) ? rec.status : 'active',
-    dismiss_reason: rec.dismiss_reason ?? null,
+    // Redacted and capped like content, and for exactly the same reason. This field came in
+    // RAW from the sync document — untrusted text written by anyone who can push to the shared
+    // repo — so a credential in a peer's dismiss reason was stored in the local plaintext DB and
+    // then re-published by the next `exportAllRows`. It was also the one uncapped string on this
+    // path, which is what let a 60 KB reason through.
+    dismiss_reason: rec.dismiss_reason == null ? null : redactAndCap(rec.dismiss_reason, MAX_CONTENT_LENGTH).text,
   };
 
   const existing = db.prepare('SELECT updated_at FROM stickies WHERE id = ?').get(row.id);
@@ -435,7 +424,7 @@ export function dismissSticky(id, reason = null) {
   // or the user ("fixed — rotated the old sk-ant-… key"), it is stored in the same plaintext
   // database, and it IS carried by exportAllRows into the sync document that git-sync commits and
   // pushes. It was the one write path that skipped the redactor entirely.
-  const safeReason = reason ? redactSecrets(String(reason).slice(0, MAX_CONTENT_LENGTH)).text : null;
+  const safeReason = reason ? redactAndCap(reason, MAX_CONTENT_LENGTH).text : null;
   db.prepare(
     `UPDATE stickies
         SET status = 'dismissed', dismiss_reason = @reason, updated_at = @now

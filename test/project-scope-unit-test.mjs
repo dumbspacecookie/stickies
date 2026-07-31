@@ -133,6 +133,32 @@ check(resolveProject(SOON, LAUNCH).ok === true,
 // knownProjects swallows a store failure by design: the launch project must survive it.
 check(knownProjects('C:/Some/Other/Launch').has('C:/Some/Other/Launch'), 'any launch project is permitted even when nothing else is known');
 
+// --- a path that reduces to nothing must not become GLOBAL -----------------------------------
+//
+// `null` is the global sentinel, and `normalizeProjectPath` returns null for a bare separator or
+// a whitespace-only string. So a note written for project "/" was filed into EVERY project's
+// digest. The guard only tested for markup characters, while three comments beside it described
+// a protection it did not provide. Reachable from the Stop hook with cwd `/` on POSIX, and from
+// a synced document — which is untrusted input written by whoever can push to the sync repo.
+{
+  const BS = String.fromCharCode(92);
+  // Only forms that genuinely reduce to nothing. `./` and `/./` are NOT in this list: they
+  // normalize to `.`, which is a real relative path, not the global sentinel.
+  for (const p of ['/', '//', BS, BS + BS, '   ', '\t', ' / ', BS + ' ']) {
+    check(normalizeProjectPath(p) === null, `precondition: ${JSON.stringify(p)} normalizes to null`);
+    check(isUnsafeProjectPath(p) === true,
+      `a path that reduces to nothing is refused, not silently made global: ${JSON.stringify(p)}`);
+  }
+  // The two documented ways of ASKING for global stay allowed — this must not become a blanket ban.
+  check(isUnsafeProjectPath(null) === false, 'null still means global and is allowed');
+  check(isUnsafeProjectPath(undefined) === false, 'undefined still means global and is allowed');
+  check(isUnsafeProjectPath('') === false, 'the empty string still means global and is allowed');
+  // And ordinary paths are untouched.
+  for (const p of ['/home/x', 'C:/Users/ash/proj', 'C:/', '.', 'rel/path']) {
+    check(isUnsafeProjectPath(p) === false, `an ordinary path is still accepted: ${JSON.stringify(p)}`);
+  }
+}
+
 console.log(fail ? `\nproject-scope-unit: ${fail} FAILED` : '\nproject-scope-unit: all passed');
 try { (await import('../src/db.js')).closeDb(); } catch { /* nothing open */ }
 try { rmSync(ROOT, { recursive: true, force: true }); } catch {}

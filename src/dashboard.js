@@ -13,6 +13,7 @@ import { join, dirname, resolve } from 'node:path';
 import { pidFilePath } from './dashboard-autostart.js';
 import { ensureAuthKey, authKind, cookieHeader, authorizedUrl, authEnabled, authKeyPath, keyMatches, mintTicket, KEY_PARAM } from './dashboard-auth.js';
 import { readStickies, dismissSticky, createSticky, normalizeProjectPath, projectSummaries } from './store.js';
+import { projectIdentity, canonicalSpelling } from './store-path.js';
 import { CATEGORIES, IMPORTANCES } from './db.js';
 import { renderPage } from './dashboard-page.js';
 import { renderBoardPage } from './flow/board-page.js';
@@ -172,15 +173,23 @@ function scopeOf(url, res, { html = false } = {}) {
 // (P1s, then blockers, then work in flight). Read-only aggregation over local paths this machine
 // has already stored notes for — no arbitrary path is read from the request.
 function buildCommandCenter() {
-  const byPath = new Map(projectSummaries().map((s) => [s.project_path, s]));
-  if (PROJECT && !byPath.has(PROJECT)) {
-    byPath.set(PROJECT, { project_path: PROJECT, stickies: { total: 0, p1: 0, p2: 0, p3: 0, blockers: 0 }, lastTouched: null });
+  // Keyed and compared on project IDENTITY, not on the stored spelling. projectSummaries() now
+  // folds the two Windows spellings of one folder into a single row, and it picks one of them to
+  // display — so a string comparison against PROJECT is a coin toss. When it lost, the launch
+  // project was added a SECOND time below (with zeroed counts, because it "wasn't in the map"),
+  // and `current` was false for every row, so the command centre never highlighted the folder the
+  // dashboard was actually serving.
+  const identity = (p) => projectIdentity(p);
+  const byId = new Map(projectSummaries().map((s) => [identity(s.project_path), s]));
+  const currentId = identity(PROJECT);
+  if (currentId && !byId.has(currentId)) {
+    byId.set(currentId, { project_path: PROJECT, stickies: { total: 0, p1: 0, p2: 0, p3: 0, blockers: 0 }, lastTouched: null });
   }
-  const projects = [...byPath.values()].map((s) => {
+  const projects = [...byId.values()].map((s) => {
     const board = buildBoard(s.project_path);
     return {
       project_path: s.project_path,
-      current: s.project_path === PROJECT,
+      current: identity(s.project_path) === currentId,
       stickies: s.stickies,
       lastTouched: s.lastTouched,
       board: board.ok ? { ok: true, source: board.source, counts: board.counts, rollup: board.rollup || null } : { ok: false },
@@ -374,12 +383,28 @@ async function handle(req, res) {
   // already registered on this machine (see project-scope.js) — the same set the /command
   // page has always aggregated, so this discloses nothing new.
   if (req.method === 'GET' && path === '/api/projects') {
-    const projects = [...knownProjects(PROJECT)]
-      .map((p) => ({
-        project_path: p,
-        current: p === PROJECT,
-        hasBoard: existsSync(join(p, '.planning', 'ROADMAP.md')) || existsSync(join(p, '.flow', 'board.json')),
-      }))
+    // Folded by identity before it is listed. knownProjects() unions the launch path, the store's
+    // registered paths and the session markers as raw strings, and on Windows those are routinely
+    // three spellings of one folder — so the switcher offered the same directory two or three
+    // times, each entry opening the same board. Folded here rather than in project-scope.js
+    // because that Set is also the allowlist, which already matches by identity and must stay a
+    // superset. Same canonical spelling as /api/command so the two surfaces agree on the label.
+    const bySpelling = new Map(); // identity -> spellings[]
+    for (const p of knownProjects(PROJECT)) {
+      const id = projectIdentity(p);
+      if (!id) continue;
+      bySpelling.set(id, [...(bySpelling.get(id) || []), p]);
+    }
+    const launchId = projectIdentity(PROJECT);
+    const projects = [...bySpelling.entries()]
+      .map(([id, spellings]) => {
+        const p = canonicalSpelling(spellings);
+        return {
+          project_path: p,
+          current: id === launchId,
+          hasBoard: existsSync(join(p, '.planning', 'ROADMAP.md')) || existsSync(join(p, '.flow', 'board.json')),
+        };
+      })
       .sort((a, b) => String(a.project_path).localeCompare(String(b.project_path)));
     json(res, 200, { launchProject: PROJECT, projects });
     return;

@@ -16,7 +16,17 @@
 const UNSAFE_IN_PATH = /[<>\u0000-\u001f\u007f\u2028\u2029]/;
 
 export function isUnsafeProjectPath(p) {
-  return p !== null && p !== undefined && UNSAFE_IN_PATH.test(String(p));
+  if (p === null || p === undefined) return false; // asking for global, explicitly. Allowed.
+  const s = String(p);
+  if (s === '') return false; // the other documented spelling of "global".
+  if (UNSAFE_IN_PATH.test(s)) return true;
+  // A path that REDUCES TO NOTHING is the dangerous case, and it is not the same as asking for
+  // global — `/`, `//`, `\`, `\\` and whitespace-only strings all normalize to null, and null IS
+  // the global sentinel. So a note written for a project whose path was any of those went into
+  // every project's digest instead of one. The guard only tested for markup, which is why three
+  // comments beside it describe a protection it did not provide. Reachable from the Stop hook
+  // with cwd `/` on POSIX, and from a synced document, which is untrusted input.
+  return normalizeProjectPath(s) === null;
 }
 
 export function normalizeProjectPath(p) {
@@ -45,4 +55,23 @@ export function projectIdentity(p) {
   const np = normalizeProjectPath(p);
   if (!np) return null;
   return process.platform === 'win32' ? np.toLowerCase() : np;
+}
+
+// Which spelling to SHOW for a group of paths that share one identity.
+//
+// Any of them is correct on Windows, but "any" must not mean "whichever row the query happened to
+// return first": that reorders as notes are written and dismissed, so the dashboard's project list
+// and the session report would re-label a folder the user never touched, and a card would appear
+// to move. Lexicographic-least of the normalized spellings is the same answer every time for the
+// same set of rows. On POSIX a group is always a single spelling, so this just hands it back.
+//
+// It can still change if the LAST note in a spelling is cleared — the store keeps no canonical
+// form, so there is nothing more stable to pick without one. Documented rather than hidden.
+export function canonicalSpelling(paths) {
+  let best = null;
+  for (const p of paths) {
+    const np = normalizeProjectPath(p);
+    if (np !== null && (best === null || np < best)) best = np;
+  }
+  return best;
 }
