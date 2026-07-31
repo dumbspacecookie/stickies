@@ -7,8 +7,8 @@
 // absent, snapshotBoard() writes a committed .flow/board.json + a human BOARD.md mirror
 // that buildBoard() falls back to. Same repo-mode DNA the stickies board proved.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, lstatSync, readlinkSync, realpathSync } from 'node:fs';
+import { join, relative, dirname, resolve, sep } from 'node:path';
 import { deriveGsdBoard, COLUMNS } from './derive-gsd.mjs';
 import { derivePlanGraph, computeBlockedPhases } from './derive-plans.mjs';
 import { readPhaseDoc } from './phase-doc.mjs';
@@ -201,11 +201,59 @@ export function snapshotBoard(projectPath) {
   // blocked state), which is local and would churn the committed board.json on every read.
   const board = loadColumns(projectPath);
   const dir = join(projectPath, '.flow');
-  mkdirSync(dir, { recursive: true });
-  const jsonPath = join(dir, 'board.json');
-  const mdPath = join(dir, 'BOARD.md');
-  const docsPath = join(dir, 'docs.json');
-  const graphPath = join(dir, 'graph.json');
+
+  // Every one of the four files below must land INSIDE the project.
+  //
+  // There was no containment check at all, and neither mkdirSync(recursive) nor writeFileSync
+  // complains about traversing a directory link. A repo shipping `.flow` as a symlink — or as a
+  // Windows junction, which needs no privilege to create — therefore turned "snapshot this board"
+  // into four writes at a path of the repo's choosing: reproduced writing board.json, BOARD.md,
+  // docs.json and graph.json into a sibling directory outside the project and clobbering a file
+  // already there. backupRoadmap() in writeback.mjs resolves before it writes for exactly this
+  // reason; this function is the one that never compared.
+  //
+  // Resolve BEFORE creating anything: checking after mkdirSync still leaves an empty .flow/ on
+  // the far side of the link. Containment rather than equality, so a project root that is itself
+  // a symlink still works and a .flow that links elsewhere INSIDE the project is still allowed.
+  let realProject;
+  try {
+    realProject = realpathSync(projectPath);
+  } catch (err) {
+    throw new Error(`cannot resolve project path ${projectPath}: ${err?.message || err}`);
+  }
+  const contained = (p) => {
+    let probe = p;
+    // existsSync() FOLLOWS links, so a link whose target does not exist reads as "nothing here"
+    // and the walk below would clear it on its parent's behalf — then writeFileSync creates the
+    // file on the far side. Judge a link by its own target instead.
+    try {
+      if (lstatSync(p).isSymbolicLink()) probe = resolve(dirname(p), readlinkSync(p));
+    } catch { /* nothing at this path yet: the walk below handles it */ }
+    // Resolve the deepest part that DOES exist — the target itself normally will not.
+    while (!existsSync(probe)) {
+      const up = dirname(probe);
+      if (up === probe) return false;
+      probe = up;
+    }
+    const real = realpathSync(probe);
+    return real === realProject || real.startsWith(realProject + sep);
+  };
+  const insist = (p, what) => {
+    if (!contained(p)) {
+      throw new Error(
+        `refusing to write ${what}: it resolves outside ${projectPath}. ` +
+        'A directory in this project is a symlink or junction pointing elsewhere — remove it and re-run.'
+      );
+    }
+    return p;
+  };
+
+  mkdirSync(insist(dir, '.flow/'), { recursive: true });
+  insist(dir, '.flow/'); // re-check AFTER creating: the link could have been there all along, or planted in between
+  const jsonPath = insist(join(dir, 'board.json'), '.flow/board.json');
+  const mdPath = insist(join(dir, 'BOARD.md'), '.flow/BOARD.md');
+  const docsPath = insist(join(dir, 'docs.json'), '.flow/docs.json');
+  const graphPath = insist(join(dir, 'graph.json'), '.flow/graph.json');
 
   // Pre-tokenize every doc referenced by any card (via readPhaseDoc so the tokenization is
   // byte-identical to the live /api/phase-doc route). This makes .flow/ self-sufficient:
