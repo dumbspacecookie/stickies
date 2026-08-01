@@ -19,7 +19,10 @@ import { DEFAULT_PORT as DEFAULT_DASHBOARD_PORT } from './dashboard-port.js';
 // After a manual mutation, push it if auto-sync is enabled (opt-in, best-effort).
 function autoSyncAfterMutation() {
   const r = maybeAutoSync();
-  if (r && !r.error) console.log('  (auto-synced)');
+  if (r && !r.error) {
+    const held = (r.steps || []).some((x) => x.startsWith('push: skipped (commit only'));
+    console.log(held ? '  (committed locally — not pushed; set STICKIES_SYNC_PUSH=1)' : '  (auto-synced)');
+  }
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));

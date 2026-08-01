@@ -414,7 +414,16 @@ async function main() {
     if (created.length) {
       // Only sync when we actually captured something new (opt-in, best-effort).
       const synced = maybeAutoSync();
-      if (synced && !synced.error) process.stderr.write('stickies: auto-synced new sticky(ies)\n');
+      if (synced && !synced.error) {
+        // Name what actually happened. Push became opt-in in 0.14.0, and anyone upgrading with
+        // STICKIES_AUTO_SYNC already on would otherwise keep reading "auto-synced" while nothing
+        // left the machine — a silent stop that reports success, which is the exact failure this
+        // release exists to end. Said on the turn it happens, not buried in `stickies doctor`.
+        const held = (synced.steps || []).some((x) => x.startsWith('push: skipped (commit only'));
+        process.stderr.write(held
+          ? 'stickies: committed new sticky(ies) locally — NOT pushed (set STICKIES_SYNC_PUSH=1 to push)\n'
+          : 'stickies: auto-synced new sticky(ies)\n');
+      }
       // One batched post for the turn, not one per note.
       await notify(created, 'created');
     }

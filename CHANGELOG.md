@@ -84,6 +84,26 @@ green. Green is not the bar any more — `npm run gate` is, and it is now armed 
   into an error or followed off to another host.
 - The session-start digest is size-capped and marked as data rather than instruction.
 
+### Changed — git sync no longer pushes unless you ask
+
+**If you use `STICKIES_AUTO_SYNC`, read this one.** Taking a note now **commits** to your sync repo
+and stops there. Set **`STICKIES_SYNC_PUSH=1`** to restore automatic pushing.
+
+Deciding where a commit should go turned out to hold more of your git configuration than any
+reimplementation of it could. This function had three separate bugs in two attempts: it created
+remote branches; then it wrote a `wip` branch onto shared `main`; then it used your *fetch* remote
+as the *push* remote, which on a fork sends your notes to the project you forked from — because
+`remote.pushDefault` and `branch.<n>.pushRemote` exist precisely so those can differ. Getting this
+wrong writes to a repository other people share, so the default is now to do nothing.
+
+With the opt-in set, Stickies runs a bare `git push` — no refspec, no remote — so `push.default`,
+`pushRemote` and your branch's own upstream decide, and it goes exactly where your own `git push`
+would send it. We defer to that policy rather than re-deriving it.
+
+The hook and the CLI now say **"committed locally — NOT pushed"** instead of "auto-synced" when the
+push is held, so an upgrade cannot leave you believing you are syncing across machines when you are
+not. `stickies sync` prints the same in its step list.
+
 ### Fixed — found by the release gate, before this version shipped
 
 The gate's agent review ran over this release and found six defects in it, every one invisible to a

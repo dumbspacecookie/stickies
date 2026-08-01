@@ -299,6 +299,25 @@ check(!hookCommitted.includes('.env.hooked'),
   delete process.env.STICKIES_SYNC_PUSH;
 }
 
+// --- 6b. an upgrade must not silently stop pushing while still saying "auto-synced" -----------
+//
+// Push became opt-in in this release. Anyone already running STICKIES_AUTO_SYNC gets that change
+// without asking for it, and maybeAutoSync discards `steps`, so the hook and the CLI would keep
+// printing "auto-synced" while nothing left the machine. That is a silent stop reporting success —
+// the precise failure mode this release exists to end — so it is pinned here rather than trusted.
+{
+  const src = readFileSync(join(HERE, '..', 'src', 'auto-capture.js'), 'utf8');
+  const cli = readFileSync(join(HERE, '..', 'src', 'cli-main.js'), 'utf8');
+  for (const [name, text] of [['the post-turn hook', src], ['the CLI', cli]]) {
+    check(/push: skipped \(commit only/.test(text),
+      `${name} inspects the steps to see whether a push actually happened`);
+    check(/NOT pushed|not pushed/.test(text),
+      `${name} says so plainly when it did not`);
+    check(/STICKIES_SYNC_PUSH=1/.test(text),
+      `${name} names the switch that turns pushing back on`);
+  }
+}
+
 // --- 7. a remote that is not called `origin` ---------------------------------------------------
 //
 // The old code pushed to a hardcoded `origin`, so any other remote name failed every time while the
