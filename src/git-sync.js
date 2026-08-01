@@ -151,13 +151,40 @@ export function sync({ repo = resolveSyncRepo(), file } = {}) {
       // ours, pushing ours pushes theirs too. Git sends a commit with all its ancestors; there is
       // no refspec that says "just this one". The honest mitigation is a dedicated sync repo,
       // which is what the docs recommend — not a cleverer push.
+      // This is `push.default=simple`, and it is git's default for a reason: push to the tracked
+      // branch ONLY when it has the same name as the branch you are standing on.
+      //
+      // The previous version read @{u}, stripped a literal `origin/`, and pushed `HEAD:<rest>`.
+      // Three ways that went wrong, all reproduced:
+      //   1. `git checkout -b wip origin/main` — the ordinary way to start a branch — sets
+      //      @{u}=origin/main, so taking a NOTE pushed the wip branch onto shared `main`. That is
+      //      worse than the stray-branch bug this code replaced: a stray branch can be ignored,
+      //      main is what everyone pulls. In repo-mode it fires from a Stop hook, unattended.
+      //   2. On a fork (origin=your fork, upstream=source), @{u}=upstream/main, the strip is a
+      //      no-op, and `push origin HEAD:upstream/main` CREATES a branch literally named
+      //      "upstream/main" on your fork — the exact class the change was meant to end.
+      //   3. With any remote not called `origin`, every push failed forever against a hardcoded
+      //      `origin` while the CLI still printed "auto-synced".
+      // Parsing the remote out of @{u} instead of assuming `origin` fixes 2 and 3; requiring the
+      // names to match fixes 1. When they differ we do nothing and say which branch we declined to
+      // write to — guessing is what caused this.
       const upstream = git(repo, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
       if (upstream.code !== 0) {
         steps.push('push: skipped (no upstream — run `git push -u origin <branch>` once yourself)');
       } else {
-        const branch = upstream.out.trim().replace(/^origin\//, '');
-        const push = git(repo, ['push', 'origin', `HEAD:${branch}`]);
-        steps.push(push.code === 0 ? 'push: ok' : `push: failed (${(push.err || push.out).split('\n')[0]})`);
+        const up = upstream.out.trim();
+        const cut = up.indexOf('/');
+        const remoteName = cut > 0 ? up.slice(0, cut) : 'origin';
+        const branch = cut > 0 ? up.slice(cut + 1) : up;
+        const current = git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']).out.trim();
+        if (!current || current === 'HEAD') {
+          steps.push('push: skipped (detached HEAD — nothing to push to)');
+        } else if (branch !== current) {
+          steps.push(`push: skipped (${current} tracks ${up}; pushing would write ${current} onto ${branch})`);
+        } else {
+          const push = git(repo, ['push', remoteName, `HEAD:${branch}`]);
+          steps.push(push.code === 0 ? 'push: ok' : `push: failed (${(push.err || push.out).split('\n')[0]})`);
+        }
       }
     }
   } else {

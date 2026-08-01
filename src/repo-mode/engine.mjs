@@ -125,7 +125,7 @@ function saveStore(store) {
 //
 // The stamp fingerprints those regions so `stickies doctor` can tell a user that the engine
 // committed in their repo predates a redactor fix and needs `stickies init-repo` re-run.
-const ENGINE_STAMP = '0ab86490fd00';
+const ENGINE_STAMP = '415a218a5538';
 
 // <<<GENERATED:redact — copied from src/redact.js by scripts/build-engine.mjs. DO NOT EDIT HERE.>>>
 // Conservative secret scrubbing applied to sticky content (and tags) before they are
@@ -166,8 +166,24 @@ const HWS = '[^\\S\\n\\r\\u0085\\u2028\\u2029]*';
 // because "TODO: rotate this" is a line people write under a header they are TALKING about, and
 // eating their note is the worse bug of the two.
 const ARMOR_HEADER = '(?:Version|Comment|MessageID|Hash|Charset|Proc-Type|DEK-Info)';
+// The two branches are an ALTERNATION, not "optional header followed by optional spaces", and the
+// difference is six minutes of CPU. Written the obvious way —
+//   (?:EOL (?:HEADER:[^term]*)? HWS){0,8}
+// — the header tail and the trailing HWS BOTH match horizontal whitespace, so a header line padded
+// with W spaces has W+1 equally valid splits between them. `{0,8}` nests that up to eight deep, and
+// the base64 group that follows fails whenever the next line is not key data, which forces the
+// engine to enumerate all W^N of them. Measured on the shipped build: a 294-char note took 2.6s, a
+// 444-char note took 125s, and both are UNDER the 500-character limit that `createSticky` checks
+// BEFORE redaction runs — so the cap is not a defence. `upsertFromSync` has no length gate at all.
+// As an alternation the branches cannot both claim the same space, each backtrack step dies against
+// the next EOL immediately, and the cost is linear. Matching behaviour is unchanged: branch 1 eats a
+// header line including its trailing spaces, branch 2 eats a blank-or-whitespace line, and an
+// INDENTED header matched neither before and matches neither now.
+// Do NOT "simplify" HWS to `[^\S\n]` or `\s*` — see the note on HWS above; that reintroduces a
+// leak, not a slowdown. Re-run the timing assertions in test/redaction-parity-test.mjs after any
+// edit here.
 const ARMOR_PREAMBLE =
-  `(?:${EOL}(?:${ARMOR_HEADER}:[^\\n\\r\\u0085\\u2028\\u2029]*)?${HWS}){0,8}`;
+  `(?:${EOL}(?:${ARMOR_HEADER}:[^\\n\\r\\u0085\\u2028\\u2029]*|${HWS})){0,8}`;
 
 // 2. Known token shapes — the whole match is a secret, replaced wholesale.
 const TOKEN_PATTERNS = [
@@ -381,7 +397,28 @@ function redactAndCap(input, cap) {
 //   - an UNCLOSED fence runs to end of document — the safe reading, because the alternative is
 //     treating someone's half-written example as live structure
 
-const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+// `[\s\S]*` for the info string, not `.*`, and it is a security boundary rather than a nicety.
+//
+// JS `.` does not match U+2028 or U+2029. Callers do not all agree on what a line is —
+// src/directives.js splits on /\r?\n/, while derive-gsd.mjs and writeback.mjs split on
+// /\r\n|\n|\r/ — so a "line" handed to this scanner can still contain one of those characters. When
+// it sat on a fence-OPEN line, `(.*)$` failed to match, `marker` was never set, and every following
+// line read as UNFENCED. That turned the capture rule inside out: a `!!sticky … global ::` line the
+// model had merely QUOTED inside a code fence was executed, filed as a global note visible in every
+// project on the machine, with `ignored.fenced` still 0 so nothing was reported. Reproduced through
+// the real scanner.
+//
+// With `[\s\S]*` the info string absorbs the terminator, the fence opens, and the directive — on
+// that line or the next — is correctly inside it. Where callers DO split on every terminator this
+// is identical to `.*`, because no line can then contain one. The close test below is unaffected:
+// `m[2].trim()` treats U+2028/U+2029 as whitespace, so a close line carrying one still closes.
+//
+// The underlying disagreement between the two line splitters is the root cause and is NOT fixed
+// here — this closes the bypass without changing how content is split. Same blind spot still exists
+// in the `### Phase N` heading regexes (derive-gsd.mjs, writeback.mjs), where it degrades into a
+// refused drag rather than a write, and their sibling STATUS regexes already use [\s\S] for exactly
+// this reason.
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})([\s\S]*)$/;
 
 // Returns a boolean per line: true when that line is inside (or is a delimiter of) a fenced block.
 // The delimiters themselves count as fenced — nothing structural is ever declared on them.
@@ -665,8 +702,21 @@ function autocommit(n) {
   if (!upstream.ok) {
     return `committed; push skipped (no upstream for ${branch} — run \`git push -u origin ${branch}\` once yourself)`;
   }
-  const target = upstream.out.replace(/^origin\//, '') || branch;
-  const p = git(['push', 'origin', `HEAD:${target}`]);
+  // `push.default=simple` — see the long note on the same decision in src/git-sync.js. Stripping a
+  // literal `origin/` and pushing to a hardcoded `origin` meant that a branch made the ordinary way
+  // (`git checkout -b wip origin/main`) had a captured note pushed onto shared `main`; that a fork
+  // layout created a branch named `upstream/main`; and that any remote not called `origin` failed
+  // every time. This copy matters MORE than the one in git-sync.js, not less: it runs from a Stop
+  // hook inside the user's own product repo, and `stickies init-repo` copies this file into every
+  // repo it is installed in, so a version shipped wrong freezes there until the user reinstalls.
+  const up = upstream.out.trim();
+  const cut = up.indexOf('/');
+  const remoteName = cut > 0 ? up.slice(0, cut) : 'origin';
+  const target = cut > 0 ? up.slice(cut + 1) : (up || branch);
+  if (target !== branch) {
+    return `committed; push skipped (${branch} tracks ${up}; pushing would write ${branch} onto ${target})`;
+  }
+  const p = git(['push', remoteName, `HEAD:${target}`]);
   return p.ok ? `committed + pushed to ${target}` : `committed; push skipped (${p.out.split('\n')[0]})`;
 }
 

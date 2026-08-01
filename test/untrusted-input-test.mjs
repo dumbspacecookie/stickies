@@ -107,6 +107,71 @@ for (const bad of [null, undefined, {}, { id: 1 }, 'str', 42, []]) {
   check(!threw, `a degenerate sync record (${JSON.stringify(bad)}) does not throw`);
 }
 
+// A record with NO USABLE CONTENT must not overwrite a note that has some.
+//
+// Every check above validates a field and skips the record. Content was the one field never
+// validated — it went straight to redactAndCap, whose `String(input ?? '')` turns missing, null or
+// a non-string into ''. With a newer updated_at that reached the full-column UPDATE and replaced a
+// real note with an empty one; the local store is then what the next export publishes, so the blank
+// was pushed to the shared file and adopted by every other machine, leaving no copy of the text
+// anywhere. Reproduced across two databases before this assertion existed.
+//
+// The `rec()` factory above always supplies content, which is exactly why the whole class was
+// invisible: none of the hostile-record assertions could reach the code path. createSticky has
+// required a non-empty string since the beginning — this is the same rule, on the untrusted side.
+{
+  const keep = createSticky({ content: 'the only copy of this fact', category: 'decision', importance: 'P1', project_path: 'C:/p' });
+  const newer = { id: keep.id, category: 'decision', importance: 'P1', project_path: 'C:/p', updated_at: '2099-01-01T00:00:00.000Z' };
+  for (const [label, patch] of [
+    ['no content field at all', {}],
+    ['content: null', { content: null }],
+    ['content: ""', { content: '' }],
+    ['content: "   "', { content: '   ' }],
+    ['content: []', { content: [] }],
+    ['content: 42', { content: 42 }],
+  ]) {
+    check(upsertFromSync({ ...newer, ...patch }) === 'skipped', `a sync record with ${label} is skipped`);
+    check(getSticky(keep.id).content === 'the only copy of this fact', `and the real note survives it (${label})`);
+  }
+  // The control that keeps this from degrading into "never accept anything": a newer record that
+  // DOES carry text still wins, because last-writer-wins is the documented merge rule.
+  check(upsertFromSync({ ...newer, content: 'a genuine update from the other machine' }) === 'updated',
+    'a newer record WITH content still updates the note');
+  check(getSticky(keep.id).content === 'a genuine update from the other machine', 'and its text is what lands');
+}
+
+// A malformed field must not wedge sync permanently.
+//
+// created_at/updated_at/expires_at/project_key were bound straight into SQLite, which refuses
+// anything that is not a string, number, bigint, null or buffer. An object threw "Provided value
+// cannot be bound to SQLite parameter N", the throw escaped the per-record loop and aborted the
+// WHOLE import; there is no transaction, so it was left half-applied, the export that would have
+// rewritten the shared file never ran, and every auto-sync caller discards the returned error — so
+// the machine silently stopped sending and receiving notes. A peer on a build that widens one of
+// these fields causes it with no malice at all. The near-miss above (`a degenerate sync record
+// does not throw`) never reached a bind: each of its cases is rejected at the id/category gate.
+{
+  for (const [label, patch] of [
+    ['created_at: {}', { created_at: {} }],
+    ['updated_at: []', { updated_at: [] }],
+    ['expires_at: {}', { expires_at: {} }],
+    ['project_key: {}', { project_key: {} }],
+    ['created_at: 42', { created_at: 42 }],
+  ]) {
+    let threw = null;
+    try { upsertFromSync(rec({ id: 'bind-' + label, ...patch })); } catch (e) { threw = e.message; }
+    check(threw === null, `a record with ${label} does not throw (${threw || 'ok'})`);
+  }
+  // And the import as a whole survives one poisoned record: the good one behind it still lands.
+  let aborted = null;
+  try {
+    upsertFromSync(rec({ id: 'poison', created_at: {} }));
+    upsertFromSync(rec({ id: 'behind-the-poison', content: 'the note queued after the bad one' }));
+  } catch (e) { aborted = e.message; }
+  check(aborted === null, `a poisoned record does not abort the records after it (${aborted || 'ok'})`);
+  check(getSticky('behind-the-poison') != null, 'and the note behind it is actually stored');
+}
+
 // Two behaviours that are BY DESIGN and documented in SECURITY.md. Pinned so that if either ever
 // changes, it changes deliberately: last-writer-wins means a peer with write access to your sync
 // repo can revive notes you dismissed, and a null project_path means global — every project.

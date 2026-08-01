@@ -36,8 +36,24 @@ const HWS = '[^\\S\\n\\r\\u0085\\u2028\\u2029]*';
 // because "TODO: rotate this" is a line people write under a header they are TALKING about, and
 // eating their note is the worse bug of the two.
 const ARMOR_HEADER = '(?:Version|Comment|MessageID|Hash|Charset|Proc-Type|DEK-Info)';
+// The two branches are an ALTERNATION, not "optional header followed by optional spaces", and the
+// difference is six minutes of CPU. Written the obvious way —
+//   (?:EOL (?:HEADER:[^term]*)? HWS){0,8}
+// — the header tail and the trailing HWS BOTH match horizontal whitespace, so a header line padded
+// with W spaces has W+1 equally valid splits between them. `{0,8}` nests that up to eight deep, and
+// the base64 group that follows fails whenever the next line is not key data, which forces the
+// engine to enumerate all W^N of them. Measured on the shipped build: a 294-char note took 2.6s, a
+// 444-char note took 125s, and both are UNDER the 500-character limit that `createSticky` checks
+// BEFORE redaction runs — so the cap is not a defence. `upsertFromSync` has no length gate at all.
+// As an alternation the branches cannot both claim the same space, each backtrack step dies against
+// the next EOL immediately, and the cost is linear. Matching behaviour is unchanged: branch 1 eats a
+// header line including its trailing spaces, branch 2 eats a blank-or-whitespace line, and an
+// INDENTED header matched neither before and matches neither now.
+// Do NOT "simplify" HWS to `[^\S\n]` or `\s*` — see the note on HWS above; that reintroduces a
+// leak, not a slowdown. Re-run the timing assertions in test/redaction-parity-test.mjs after any
+// edit here.
 const ARMOR_PREAMBLE =
-  `(?:${EOL}(?:${ARMOR_HEADER}:[^\\n\\r\\u0085\\u2028\\u2029]*)?${HWS}){0,8}`;
+  `(?:${EOL}(?:${ARMOR_HEADER}:[^\\n\\r\\u0085\\u2028\\u2029]*|${HWS})){0,8}`;
 
 // 2. Known token shapes — the whole match is a secret, replaced wholesale.
 const TOKEN_PATTERNS = [

@@ -245,6 +245,28 @@ check(engineBehind.length === 0,
   redactSecrets(prose);
   const ms2 = Date.now() - t1;
   check(ms2 < 1000, `100 KB of prose repeatedly saying "Bearer" scans in well under a second (${ms2} ms)`);
+
+  // A SHORT input, because both assertions above are long ones and length was never the trigger.
+  //
+  // ARMOR_PREAMBLE's header tail and its trailing HWS both matched horizontal whitespace, so a
+  // header line padded with W spaces had W+1 equivalent splits, nested `{0,8}` deep, enumerated in
+  // full whenever the following line is not base64. Measured on the shipped build: 294 chars ->
+  // 2.6 s, 444 chars -> 125 s. Both are UNDER the 500-character limit `createSticky` enforces
+  // BEFORE redaction, so the cap never stood between a user and a two-minute stall — and
+  // `upsertFromSync` applies no length gate at all, which puts it in reach of a shared sync file.
+  //
+  // The two long assertions above pass at full speed against this input class because neither
+  // contains horizontal whitespace after an armor header, which is the entire trigger. That is why
+  // this one is here, and why it is deliberately SMALL: a timing check that only fires on large
+  // inputs cannot see an exponential that peaks inside the size limit.
+  const armored = '-----BEGIN OPENSSH PRIVATE KEY-----\n'
+    + Array.from({ length: 5 }, () => 'Comment:' + ' '.repeat(70)).join('\n')
+    + '\nnot-base64-!!';
+  check(armored.length <= 500, `the payload is a legal note (${armored.length} chars, cap 500)`);
+  const t2 = Date.now();
+  redactSecrets(armored);
+  const ms3 = Date.now() - t2;
+  check(ms3 < 1000, `armor headers padded with spaces and no key data scan in well under a second (${ms3} ms)`);
 }
 
 // --- redacting twice must not eat the text between the markers -------------------------------

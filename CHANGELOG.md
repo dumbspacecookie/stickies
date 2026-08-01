@@ -84,6 +84,44 @@ green. Green is not the bar any more — `npm run gate` is, and it is now armed 
   into an error or followed off to another host.
 - The session-start digest is size-capped and marked as data rather than instruction.
 
+### Fixed — found by the release gate, before this version shipped
+
+The gate's agent review ran over this release and found six defects in it, every one invisible to a
+green suite. They are listed separately because the honest thing to say about them is that they were
+in the release candidate, not in 0.13.0 — three of them are in code this very release introduced.
+
+- **A 444-character note could freeze Stickies for two minutes.** The pattern that recognises a
+  pasted private key let its armor-header tail and its trailing whitespace both match the same
+  spaces, so a header line padded with *W* spaces had *W+1* equivalent readings, nested eight deep,
+  and the engine enumerated all of them. Measured on the candidate: 294 chars → 2.6 s, 444 chars →
+  125 s, against 0.4 ms for ordinary text of the same length. It ran on **every** write — the MCP
+  tool, the CLI, the dashboard, the post-turn hook — and on records arriving from a shared sync
+  file, where no length limit applies at all. Now linear.
+- **Taking a note could push your branch onto `main`.** The new upstream-aware push read the tracked
+  branch and pushed to it *by name*, so on a branch made the ordinary way (`git checkout -b wip
+  origin/main`) a captured note fast-forwarded shared `main` to your unfinished work. This was a
+  regression introduced by the push fix in this same release, and it is worse than the stray remote
+  branch it replaced. Stickies now follows git's own `push.default=simple`: it pushes only when the
+  tracked branch has the same name as the branch you are on, and otherwise says which branch it
+  declined to write to.
+- **The remote is no longer assumed to be called `origin`.** On a fork (`@{u} = upstream/main`) the
+  old code created a branch literally named `upstream/main`; with any remote not named `origin`,
+  every push failed forever while the CLI reported the sync as fine.
+- **A sync record with no text could blank a real note — and publish the blank.** `upsertFromSync`
+  validated the id, category, importance and path but never the content, so a missing or non-string
+  value became `''` and, with a newer timestamp, replaced a real note. The local store is what the
+  next export publishes, so the empty note then propagated to every other machine. It now applies
+  the same rule `createSticky` always has.
+- **One malformed field no longer wedges sync permanently.** Timestamps were bound straight to
+  SQLite, which refuses values that are not strings or numbers; one object-valued `created_at` threw,
+  aborted the *entire* import, and — because every auto-sync caller discards the error — the machine
+  silently stopped sending and receiving notes with nothing said.
+- **An invisible character no longer disables the code-fence rule.** `!!sticky` directives are
+  honoured only when the model *speaks* them, never when it *quotes* them inside a fence. A U+2028 or
+  U+2029 on the fence's opening line made the scanner miss the fence entirely, so a directive quoted
+  out of a hostile file was executed — including with `global`, which files it into every project on
+  the machine — while the summary still reported nothing refused.
+
 ### Added
 
 - **`npm run gate`** — one command that has to pass before anything leaves the repo: the suite,

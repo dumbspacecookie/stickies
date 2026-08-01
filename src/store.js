@@ -339,6 +339,18 @@ export function exportAllRows() {
 export function upsertFromSync(rec) {
   if (!rec || typeof rec.id !== 'string') return 'skipped';
   if (!CATEGORIES.includes(rec.category) || !IMPORTANCES.includes(rec.importance)) return 'skipped';
+  // The SAME rule createSticky applies at the top of this file, and it was missing here — the one
+  // place the input is genuinely untrusted. Every other field was validated; content was handed
+  // straight to redactAndCap, whose `String(input ?? '')` turns a missing, null or non-string
+  // value into ''. With a newer updated_at that reached the full-column UPDATE below and REPLACED
+  // a real note with an empty one — and because the local store is what the next export publishes,
+  // the blank was then pushed to the shared file and adopted by every other machine, so no copy of
+  // the text survived anywhere. Reproduced end to end across two databases.
+  //
+  // This is the same shape as the repo-mode `loadStore` bug this release fixes: absent input read
+  // as empty, then written over the real thing. A record with nothing to say is not an instruction
+  // to forget what we already know.
+  if (typeof rec.content !== 'string' || rec.content.trim() === '') return 'skipped';
   // The sync document is a shared file from another machine — the genuinely untrusted input.
   // A record whose project_path normalizes to null would be imported as a GLOBAL note, i.e. it
   // would surface in every project on this machine. Skip it like any other bad record.
@@ -358,16 +370,32 @@ export function upsertFromSync(rec) {
     project_path: normalizeProjectPath(rec.project_path),
     // Derive the key from the NORMALIZED path, as createSticky does. Using the raw value let a
     // synced record carry a key that disagreed with the path stored beside it.
-    project_key: rec.project_key ?? deriveProjectKey(normalizeProjectPath(rec.project_path)),
+    project_key: typeof rec.project_key === 'string'
+      ? rec.project_key
+      : deriveProjectKey(normalizeProjectPath(rec.project_path)),
     tags: JSON.stringify(
       (Array.isArray(rec.tags) ? rec.tags.slice(0, MAX_TAGS) : []).map((t) => redactAndCap(t, MAX_TAG_LENGTH).text)
     ),
-    created_at: rec.created_at || nowIso(),
-    updated_at: rec.updated_at || nowIso(),
+    // `typeof === 'string'`, not `||`. These are bound straight into SQLite, and node:sqlite
+    // refuses any value that is not a string, number, bigint, null or buffer — so a record whose
+    // `created_at` was an object or an array threw "Provided value cannot be bound to SQLite
+    // parameter N", and that throw propagated out of the per-record loop and aborted the ENTIRE
+    // import. There is no transaction, so the import was left half-applied; the export that would
+    // have rewritten the shared file never ran; and every auto-sync caller discards the returned
+    // error, so the machine simply stopped sending and receiving notes with nothing said. A peer
+    // on a build that widens one of these fields produces it without any malice at all.
+    //
+    // A bad value now degrades to "now", exactly as a missing one always did. Rejecting the whole
+    // record would be defensible too, but a wrong timestamp is not a reason to drop a note whose
+    // text is intact — and silently wedging the entire sync is not defensible under any reading.
+    created_at: typeof rec.created_at === 'string' ? rec.created_at : nowIso(),
+    updated_at: typeof rec.updated_at === 'string' ? rec.updated_at : nowIso(),
     // Self-heal legacy rows: a category whose TTL is null (e.g. todo) is dismissal-only,
     // so drop any stale expires_at that an older version wrote — otherwise the row keeps
     // getting swept to 'stale' on every read. New expiries for TTL'd categories pass through.
-    expires_at: CATEGORY_TTL_DAYS[rec.category] == null ? null : (rec.expires_at ?? null),
+    expires_at: CATEGORY_TTL_DAYS[rec.category] == null
+      ? null
+      : (typeof rec.expires_at === 'string' ? rec.expires_at : null),
     source: rec.source === 'manual' ? 'manual' : 'auto',
     origin: normalizeOrigin(rec.origin),
     session_id: rec.session_id ? String(rec.session_id) : null,

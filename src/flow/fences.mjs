@@ -24,7 +24,28 @@
 //   - an UNCLOSED fence runs to end of document — the safe reading, because the alternative is
 //     treating someone's half-written example as live structure
 
-const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+// `[\s\S]*` for the info string, not `.*`, and it is a security boundary rather than a nicety.
+//
+// JS `.` does not match U+2028 or U+2029. Callers do not all agree on what a line is —
+// src/directives.js splits on /\r?\n/, while derive-gsd.mjs and writeback.mjs split on
+// /\r\n|\n|\r/ — so a "line" handed to this scanner can still contain one of those characters. When
+// it sat on a fence-OPEN line, `(.*)$` failed to match, `marker` was never set, and every following
+// line read as UNFENCED. That turned the capture rule inside out: a `!!sticky … global ::` line the
+// model had merely QUOTED inside a code fence was executed, filed as a global note visible in every
+// project on the machine, with `ignored.fenced` still 0 so nothing was reported. Reproduced through
+// the real scanner.
+//
+// With `[\s\S]*` the info string absorbs the terminator, the fence opens, and the directive — on
+// that line or the next — is correctly inside it. Where callers DO split on every terminator this
+// is identical to `.*`, because no line can then contain one. The close test below is unaffected:
+// `m[2].trim()` treats U+2028/U+2029 as whitespace, so a close line carrying one still closes.
+//
+// The underlying disagreement between the two line splitters is the root cause and is NOT fixed
+// here — this closes the bypass without changing how content is split. Same blind spot still exists
+// in the `### Phase N` heading regexes (derive-gsd.mjs, writeback.mjs), where it degrades into a
+// refused drag rather than a write, and their sibling STATUS regexes already use [\s\S] for exactly
+// this reason.
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})([\s\S]*)$/;
 
 // Returns a boolean per line: true when that line is inside (or is a delimiter of) a fenced block.
 // The delimiters themselves count as fenced — nothing structural is ever declared on them.
