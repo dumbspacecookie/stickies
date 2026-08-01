@@ -11,6 +11,13 @@ import { scratchDir, cleanup } from './_env.mjs';
 
 // Own directory per run. This one wiped a FIXED root on startup, so a second concurrent run
 // deleted the first run's bare remote out from under it mid-push.
+// Push is OPT-IN as of 0.14.0 -- taking a note commits to the sync repo and stops, because
+// deciding where a commit should go turned out to hold more of the user's git configuration
+// than any reimplementation could, and getting it wrong writes to a repo other people share.
+// This suite is about the round trip BETWEEN two machines, so it opts in explicitly; the
+// default is asserted in sync-safety-test.mjs.
+process.env.STICKIES_SYNC_PUSH = '1';
+
 const ROOT = scratchDir('gitsync');
 const REMOTE = join(ROOT, 'remote.git');
 const WA = join(ROOT, 'machineA');

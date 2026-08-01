@@ -8,6 +8,11 @@ import { createSticky, getSticky } from '../src/store.js';
 import { maybeAutoSync, autoSyncEnabled } from '../src/git-sync.js';
 import { scratchDir, cleanup } from './_env.mjs';
 
+// Push is OPT-IN as of 0.14.0 (see src/git-sync.js). This suite exercises the auto-sync round
+// trip between two machines, so it opts in; the default-off behaviour is asserted in
+// sync-safety-test.mjs.
+process.env.STICKIES_SYNC_PUSH = '1';
+
 // Own directory per run: this file wiped a FIXED root at startup, so a concurrent run deleted
 // the other's bare remote between a push and the pull that checks it arrived.
 const ROOT = scratchDir('autosync');

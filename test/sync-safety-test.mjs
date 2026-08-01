@@ -236,37 +236,16 @@ const hookCommitted = g(HOOKREPO, 'show', '--name-only', '--format=', 'HEAD').st
 check(!hookCommitted.includes('.env.hooked'),
   `a pre-commit hook running \`git add -A\` cannot widen the commit (got ${JSON.stringify(hookCommitted)})`);
 
-// --- 5. push sends our commit, not the user's unrelated local work ----------------------------
+// --- 5. taking a note does not push, and 6. opting in defers the decision to git --------------
 //
-// `push -u origin HEAD` pushed the whole branch — every unpushed local commit went out under a
-// sync, and on a branch with no upstream it CREATED that branch on the remote.
-
-const NOUP = join(ROOT, 'noupstream');
-spawnSync('git', ['clone', REMOTE, NOUP], { encoding: 'utf8' });
-g(NOUP, 'config', 'user.email', 'test@stickies.local');
-g(NOUP, 'config', 'user.name', 'Stickies Test');
-g(NOUP, 'checkout', '-b', 'wip-feature');
-closeDb();
-process.env.STICKIES_DB = join(ROOT, 'c.db');
-createSticky({ content: 'a note on a wip branch', category: 'context', project_path: null });
-const noUpRes = sync({ repo: NOUP });
-const remoteBranches = spawnSync('git', ['-C', REMOTE, 'branch', '--list'], { encoding: 'utf8' }).stdout;
-check(!remoteBranches.includes('wip-feature'),
-  `a WIP branch with no upstream is not published (remote branches: ${JSON.stringify(remoteBranches.trim())})`);
-check(noUpRes.steps.some((s) => /push: skipped \(no upstream/.test(s)),
-  `and the reason is reported (${noUpRes.steps.join(' | ')})`);
-
-// --- 6. push must never write one branch onto a DIFFERENTLY NAMED branch ----------------------
+// Stickies used to decide where the commit should go, and got it wrong three times: `push -u origin
+// HEAD` CREATED a remote branch; reading @{u} and pushing to its branch wrote a `wip` branch onto
+// shared `main`; and using @{u}'s remote as the push remote sent notes to the repo you FORKED FROM,
+// because `remote.pushDefault` and `branch.<n>.pushRemote` exist so fetch and push can differ.
 //
-// The fix for §5 replaced `push -u origin HEAD` with "read @{u}, strip `origin/`, push HEAD to
-// what's left". That traded a stray remote branch for something worse: `git checkout -b wip
-// origin/main` — the ordinary way to start a branch — sets @{u}=origin/main, so taking a NOTE
-// pushed the wip branch onto shared `main`. A stray branch can be ignored; main is what the team
-// pulls. Every fixture in this file used a remote named `origin` on a branch of the same name as
-// its upstream, so the whole class was invisible: deleting the guard below leaves them all green.
-//
-// The rule is git's own `push.default=simple` — push to the tracked branch only when it has the
-// same name as the branch you are on.
+// The contract is now: capture COMMITS and stops. Nothing leaves the machine unless
+// STICKIES_SYNC_PUSH=1, and when it is set we run bare `git push` so git's own configuration —
+// push.default, pushRemote, the branch's upstream — decides. We no longer re-derive that policy.
 {
   const R2 = join(ROOT, 'remote2.git');
   const W2 = join(ROOT, 'work2');
@@ -279,43 +258,52 @@ check(noUpRes.steps.some((s) => /push: skipped \(no upstream/.test(s)),
   g(W2, 'push', '-u', 'origin', 'main');
   const mainBefore = g(W2, 'rev-parse', 'origin/main').stdout.trim();
 
-  // The user starts a branch the ordinary way. Its upstream is main, its name is not.
+  // The scenario that made the old behaviour dangerous: a branch made the ordinary way, whose name
+  // differs from the branch it tracks, carrying work the user has not shared.
   g(W2, 'checkout', '-b', 'wip', '--track', 'origin/main');
   writeFileSync(join(W2, 'WIP-SECRET.txt'), 'half-finished work the user has not shared\n');
   g(W2, 'add', 'WIP-SECRET.txt');
   g(W2, 'commit', '--no-verify', '-m', 'wip: not ready');
 
+  delete process.env.STICKIES_SYNC_PUSH;
   closeDb();
   process.env.STICKIES_DB = join(ROOT, 'wip.db');
   createSticky({ content: 'a note taken while on a wip branch', category: 'context', project_path: null });
-  const wipRes = sync({ repo: W2 });
+  const off = sync({ repo: W2 });
 
-  check(wipRes.steps.some((s) => /push: skipped/.test(s)),
-    `taking a note on wip does not push it (${wipRes.steps.join(' | ')})`);
-  check(wipRes.steps.some((s) => /would write wip onto main/.test(s)),
-    'and it names the branch it declined to write to');
-  check(g(W2, 'rev-parse', 'origin/main').stdout.trim() === mainBefore,
-    'shared main is byte-for-byte where it was');
+  check(off.steps.some((s) => s.startsWith('commit: ok')), `the note is still committed locally (${off.steps.join(' | ')})`);
+  check(off.steps.some((s) => /push: skipped \(commit only/.test(s)), 'but nothing is pushed by default');
+  check(off.steps.some((s) => /STICKIES_SYNC_PUSH=1/.test(s)), 'and the opt-in is named in the message');
+  check(g(W2, 'rev-parse', 'origin/main').stdout.trim() === mainBefore, 'shared main is byte-for-byte where it was');
   const onMain = spawnSync('git', ['-C', R2, 'ls-tree', '--name-only', 'main'], { encoding: 'utf8' }).stdout;
   check(!onMain.includes('WIP-SECRET'), `the unshared file never reached main (${JSON.stringify(onMain.trim())})`);
 
-  // The positive control, which is what stops the fix degrading into "never push at all":
-  // on a branch whose name MATCHES its upstream, the push still happens.
+  // Opted in, on a branch git itself would refuse to push (name differs from its upstream under
+  // push.default=simple): we must surface git's refusal, not invent a destination for it.
+  process.env.STICKIES_SYNC_PUSH = '1';
+  closeDb();
+  process.env.STICKIES_DB = join(ROOT, 'wip2.db');
+  createSticky({ content: 'a second note on the wip branch', category: 'context', project_path: null });
+  const onWip = sync({ repo: W2 });
+  check(onWip.steps.some((s) => /push: (failed|ok)/.test(s)), `opted in, the push is attempted and its result reported (${onWip.steps.filter((s) => s.startsWith('push')).join('')})`);
+  const stillMain = spawnSync('git', ['-C', R2, 'ls-tree', '--name-only', 'main'], { encoding: 'utf8' }).stdout;
+  check(!stillMain.includes('WIP-SECRET'), 'and git still did not put the wip work on main');
+
+  // The ordinary case must keep working when opted in: same-named branch, push lands.
   g(W2, 'checkout', 'main');
   closeDb();
   process.env.STICKIES_DB = join(ROOT, 'main.db');
   createSticky({ content: 'a note taken on main', category: 'context', project_path: null });
-  const mainRes = sync({ repo: W2 });
-  check(mainRes.steps.some((s) => s === 'push: ok'),
-    `on a branch matching its upstream the push still happens (${mainRes.steps.join(' | ')})`);
+  const onMainRes = sync({ repo: W2 });
+  check(onMainRes.steps.some((s) => s === 'push: ok'), `opted in on main, the push happens (${onMainRes.steps.join(' | ')})`);
+  delete process.env.STICKIES_SYNC_PUSH;
 }
 
-// --- 7. the remote is read from @{u}, not assumed to be called `origin` -----------------------
+// --- 7. a remote that is not called `origin` ---------------------------------------------------
 //
-// `replace(/^origin\//, '')` only strips a LITERAL `origin/`. On a fork layout (@{u}=upstream/main)
-// the strip was a no-op and `push origin HEAD:upstream/main` created a branch literally named
-// "upstream/main"; and with any remote not called `origin`, every push failed forever against a
-// hardcoded name while the CLI still reported the sync as fine.
+// The old code pushed to a hardcoded `origin`, so any other remote name failed every time while the
+// CLI still reported success. Deferring to bare `git push` means the remote is whatever the user
+// configured, with no name assumed anywhere.
 {
   const R3 = join(ROOT, 'remote3.git');
   const W3 = join(ROOT, 'work3');
@@ -326,17 +314,17 @@ check(noUpRes.steps.some((s) => /push: skipped \(no upstream/.test(s)),
   g(W3, 'commit', '--allow-empty', '-m', 'init');
   g(W3, 'branch', '-M', 'main');
   g(W3, 'push', '-u', 'gh', 'main');
-
   check(g(W3, 'remote').stdout.trim() === 'gh', 'precondition: the only remote is named `gh`, not `origin`');
 
+  process.env.STICKIES_SYNC_PUSH = '1';
   closeDb();
   process.env.STICKIES_DB = join(ROOT, 'gh.db');
   createSticky({ content: 'a note in a repo whose remote is not called origin', category: 'context', project_path: null });
   const ghRes = sync({ repo: W3 });
-  check(ghRes.steps.some((s) => s === 'push: ok'),
-    `the push targets the remote named in @{u} (${ghRes.steps.join(' | ')})`);
+  check(ghRes.steps.some((s) => s === 'push: ok'), `the push works with no remote named origin (${ghRes.steps.join(' | ')})`);
   const ghLog = spawnSync('git', ['-C', R3, 'log', '--oneline', '-1', 'main'], { encoding: 'utf8' }).stdout;
-  check(/stickies sync/.test(ghLog), `and it actually arrived (${ghLog.trim()})`);
+  check(/stickies sync/.test(ghLog), `and it arrived (${ghLog.trim()})`);
+  delete process.env.STICKIES_SYNC_PUSH;
 }
 
 closeDb();

@@ -96,7 +96,10 @@ in the release candidate, not in 0.13.0 — three of them are in code this very 
   and the engine enumerated all of them. Measured on the candidate: 294 chars → 2.6 s, 444 chars →
   125 s, against 0.4 ms for ordinary text of the same length. It ran on **every** write — the MCP
   tool, the CLI, the dashboard, the post-turn hook — and on records arriving from a shared sync
-  file, where no length limit applies at all. Now linear.
+  file. The scan window is bounded to 1,524 characters, but a bound only helps a cost that grows
+  with length, and this one peaked well inside a note you were allowed to write. Now linear:
+  re-measured across ~530,000 adversarial inputs, the worst case anywhere in the redactor is
+  2.3 ms.
 - **Taking a note could push your branch onto `main`.** The new upstream-aware push read the tracked
   branch and pushed to it *by name*, so on a branch made the ordinary way (`git checkout -b wip
   origin/main`) a captured note fast-forwarded shared `main` to your unfinished work. This was a

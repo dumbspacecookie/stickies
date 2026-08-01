@@ -18,6 +18,66 @@ import { resolveDueDate } from './due.js';
 
 export { normalizeProjectPath };
 
+// Control characters are stripped HERE, in the store, because the store is the only thing every
+// write path goes through. This lived in auto-capture.js and so protected exactly one caller: the
+// post-turn hook. `stickies_write` over MCP, the CLI, the dashboard and `upsertFromSync` all wrote
+// straight past it, and a single NUL is enough to destroy a note — `sqlite3_bind_text` stops at the
+// first NUL, so "keep\0drop" is stored as "keep" and a lone NUL is stored as "". A `.trim()`
+// check cannot see that coming, because a NUL is not whitespace: it passes "is this non-empty?" and
+// then silently becomes empty on disk. That is the note-blanking bug this release is named for,
+// reachable from an ordinary tool call rather than a hostile sync file.
+//
+// Written as explicit code-point ranges rather than a regex class because a class of this kind can
+// only be written with \u escapes or with the characters themselves, and this project has been
+// bitten by both: an escape is one careless edit from becoming the literal character, and a literal
+// U+2028 IS a line terminator to the JS parser, so the file stops loading. scripts/gate.mjs refuses
+// literal invisibles in src/ for that reason. Numbers cannot be mistyped invisibly.
+const CONTROL_RANGES = [
+  [0x00, 0x1f], // C0 controls, including NUL, CR and LF
+  [0x7f, 0x9f], // DEL and the C1 controls
+  [0x2028, 0x2029], // LINE SEPARATOR / PARAGRAPH SEPARATOR
+];
+
+function isControl(code) {
+  for (const [lo, hi] of CONTROL_RANGES) if (code >= lo && code <= hi) return true;
+  return false;
+}
+
+export function stripControl(value) {
+  let out = '';
+  for (const ch of String(value ?? '')) {
+    const code = ch.codePointAt(0);
+    if (code === 9) out += ' '; // tab: a separator, so keep the separation
+    else if (!isControl(code)) out += ch;
+  }
+  return out.trim();
+}
+
+// "Is there actually a note here?" — the one question both write paths must ask, and they must ask
+// it AFTER stripping, not before. Zero-width characters are not in `trim()`'s whitespace set, so a
+// note consisting solely of U+200B/U+2060/U+180E/U+00AD survives a naive emptiness check and then
+// replaces a real note with something that renders as nothing at all.
+// Code points, not a character class, for the reason stated above — and the first draft of this
+// line was itself written with the literal characters in it, which the gate would have refused.
+const INVISIBLE_CODEPOINTS = new Set([
+  0x200b, // ZERO WIDTH SPACE
+  0x200c, // ZERO WIDTH NON-JOINER
+  0x200d, // ZERO WIDTH JOINER
+  0x2060, // WORD JOINER
+  0x180e, // MONGOLIAN VOWEL SEPARATOR
+  0x00ad, // SOFT HYPHEN
+  0xfeff, // ZERO WIDTH NO-BREAK SPACE / BOM
+]);
+
+export function hasUsableText(value) {
+  if (typeof value !== 'string') return false;
+  for (const ch of stripControl(value)) {
+    const code = ch.codePointAt(0);
+    if (!INVISIBLE_CODEPOINTS.has(code) && !/\s/.test(ch)) return true;
+  }
+  return false;
+}
+
 const IMPORTANCE_RANK = { P1: 1, P2: 2, P3: 3 };
 
 // Accept either an already-resolved ISO instant or a raw due token ("1h", "2026-07-20").
@@ -101,7 +161,11 @@ export function createSticky({
   session_id = null,
   due_at = null,
 }) {
-  if (typeof content !== 'string' || content.trim() === '') {
+  // hasUsableText, not `trim() === ''`. A NUL passes a trim check and is then truncated away by
+  // SQLite, so `stickies_write` with "\0" stored an EMPTY note and "keep\0drop" stored
+  // "keep" — silent destruction of the caller's text on the ordinary write path, not just the sync
+  // one. Zero-width characters pass a trim check too and store a note that renders as nothing.
+  if (!hasUsableText(content)) {
     throw new Error('content is required and must be a non-empty string');
   }
   // A project path carrying markup characters normalizes to null, and null means GLOBAL — so
@@ -138,7 +202,9 @@ export function createSticky({
   // is longer than many of the things it replaces — a 496-char note of comma-separated assignments
   // measured 769 chars once redacted, so a value that passed validation was stored 269 over the
   // limit the rest of the system relies on.
-  const { text: safeContent, redacted: contentRedacted } = redactAndCap(content.trim(), MAX_CONTENT_LENGTH);
+  // stripControl, not just trim: a NUL that survives to the bind is truncated away by SQLite and
+  // takes the rest of the note with it. Validated by hasUsableText above, sanitised here.
+  const { text: safeContent, redacted: contentRedacted } = redactAndCap(stripControl(content), MAX_CONTENT_LENGTH);
   const safeTags = tags.map((t) => redactAndCap(t, MAX_TAG_LENGTH).text);
   const redacted = contentRedacted || safeTags.some((t, i) => t !== tags[i]);
 
@@ -350,64 +416,84 @@ export function upsertFromSync(rec) {
   // This is the same shape as the repo-mode `loadStore` bug this release fixes: absent input read
   // as empty, then written over the real thing. A record with nothing to say is not an instruction
   // to forget what we already know.
-  if (typeof rec.content !== 'string' || rec.content.trim() === '') return 'skipped';
+  if (!hasUsableText(rec.content)) return 'skipped';
+  // `updated_at` decides last-writer-wins, so a record without a usable one cannot be ordered
+  // against anything and must not be guessed at. It used to fall back to now(), which handed the
+  // malformed record an automatic win over every note on the machine.
+  if (typeof rec.updated_at !== 'string') return 'skipped';
   // The sync document is a shared file from another machine — the genuinely untrusted input.
   // A record whose project_path normalizes to null would be imported as a GLOBAL note, i.e. it
   // would surface in every project on this machine. Skip it like any other bad record.
   if (isUnsafeProjectPath(rec.project_path)) return 'skipped';
 
   const db = getDb();
-  const row = {
-    id: rec.id,
-    // Redacted like every other write path. Tags on the next lines already were; content was not,
-    // which meant a hand-edited sync file, a peer on an older build, or pre-fix history re-imported
-    // raw secrets into the local plaintext store — and every export afterwards re-published them.
-    // redactAndCap, not slice-then-redact: a credential straddling MAX_CONTENT_LENGTH used to be
-    // cut before the redactor saw it, so the fragment persisted and every export re-published it.
-    content: redactAndCap(rec.content, MAX_CONTENT_LENGTH).text,
-    category: rec.category,
-    importance: rec.importance,
-    project_path: normalizeProjectPath(rec.project_path),
-    // Derive the key from the NORMALIZED path, as createSticky does. Using the raw value let a
-    // synced record carry a key that disagreed with the path stored beside it.
-    project_key: typeof rec.project_key === 'string'
-      ? rec.project_key
-      : deriveProjectKey(normalizeProjectPath(rec.project_path)),
-    tags: JSON.stringify(
-      (Array.isArray(rec.tags) ? rec.tags.slice(0, MAX_TAGS) : []).map((t) => redactAndCap(t, MAX_TAG_LENGTH).text)
-    ),
-    // `typeof === 'string'`, not `||`. These are bound straight into SQLite, and node:sqlite
-    // refuses any value that is not a string, number, bigint, null or buffer — so a record whose
-    // `created_at` was an object or an array threw "Provided value cannot be bound to SQLite
-    // parameter N", and that throw propagated out of the per-record loop and aborted the ENTIRE
-    // import. There is no transaction, so the import was left half-applied; the export that would
-    // have rewritten the shared file never ran; and every auto-sync caller discards the returned
-    // error, so the machine simply stopped sending and receiving notes with nothing said. A peer
-    // on a build that widens one of these fields produces it without any malice at all.
-    //
-    // A bad value now degrades to "now", exactly as a missing one always did. Rejecting the whole
-    // record would be defensible too, but a wrong timestamp is not a reason to drop a note whose
-    // text is intact — and silently wedging the entire sync is not defensible under any reading.
-    created_at: typeof rec.created_at === 'string' ? rec.created_at : nowIso(),
-    updated_at: typeof rec.updated_at === 'string' ? rec.updated_at : nowIso(),
-    // Self-heal legacy rows: a category whose TTL is null (e.g. todo) is dismissal-only,
-    // so drop any stale expires_at that an older version wrote — otherwise the row keeps
-    // getting swept to 'stale' on every read. New expiries for TTL'd categories pass through.
-    expires_at: CATEGORY_TTL_DAYS[rec.category] == null
-      ? null
-      : (typeof rec.expires_at === 'string' ? rec.expires_at : null),
-    source: rec.source === 'manual' ? 'manual' : 'auto',
-    origin: normalizeOrigin(rec.origin),
-    session_id: rec.session_id ? String(rec.session_id) : null,
-    due_at: normalizeDueAt(rec.due_at),
-    status: ['active', 'stale', 'dismissed'].includes(rec.status) ? rec.status : 'active',
-    // Redacted and capped like content, and for exactly the same reason. This field came in
-    // RAW from the sync document — untrusted text written by anyone who can push to the shared
-    // repo — so a credential in a peer's dismiss reason was stored in the local plaintext DB and
-    // then re-published by the next `exportAllRows`. It was also the one uncapped string on this
-    // path, which is what let a 60 KB reason through.
-    dismiss_reason: rec.dismiss_reason == null ? null : redactAndCap(rec.dismiss_reason, MAX_CONTENT_LENGTH).text,
-  };
+  // Built inside a try, and only the BUILD is inside it -- a database failure still propagates.
+  // Guarding four fields by type was whack-a-mole: five OTHER fields reach String() coercion
+  // first, and String() throws on an object whose toString/valueOf are shadowed by non-callables
+  // -- a shape JSON.parse produces natively, so 25 bytes in the shared sync file was enough. The
+  // throw escaped this function, aborted the ENTIRE import, and because every auto-sync caller
+  // discards the error the machine silently stopped syncing, permanently, on both ends. One
+  // unreadable record must cost exactly that record.
+  let row;
+  try {
+    row = {
+      id: rec.id,
+      // Redacted like every other write path. Tags on the next lines already were; content was not,
+      // which meant a hand-edited sync file, a peer on an older build, or pre-fix history re-imported
+      // raw secrets into the local plaintext store — and every export afterwards re-published them.
+      // redactAndCap, not slice-then-redact: a credential straddling MAX_CONTENT_LENGTH used to be
+      // cut before the redactor saw it, so the fragment persisted and every export re-published it.
+      content: redactAndCap(stripControl(rec.content), MAX_CONTENT_LENGTH).text,
+      category: rec.category,
+      importance: rec.importance,
+      project_path: normalizeProjectPath(rec.project_path),
+      // Derive the key from the NORMALIZED path, as createSticky does. Using the raw value let a
+      // synced record carry a key that disagreed with the path stored beside it.
+      project_key: typeof rec.project_key === 'string'
+        ? rec.project_key
+        : deriveProjectKey(normalizeProjectPath(rec.project_path)),
+      tags: JSON.stringify(
+        (Array.isArray(rec.tags) ? rec.tags.slice(0, MAX_TAGS) : []).map((t) => redactAndCap(t, MAX_TAG_LENGTH).text)
+      ),
+      // `typeof === 'string'`, not `||`. These are bound straight into SQLite, and node:sqlite
+      // refuses any value that is not a string, number, bigint, null or buffer — so a record whose
+      // `created_at` was an object or an array threw "Provided value cannot be bound to SQLite
+      // parameter N", and that throw propagated out of the per-record loop and aborted the ENTIRE
+      // import. There is no transaction, so the import was left half-applied; the export that would
+      // have rewritten the shared file never ran; and every auto-sync caller discards the returned
+      // error, so the machine simply stopped sending and receiving notes with nothing said. A peer
+      // on a build that widens one of these fields produces it without any malice at all.
+      //
+      // A bad value now degrades to "now", exactly as a missing one always did. Rejecting the whole
+      // record would be defensible too, but a wrong timestamp is not a reason to drop a note whose
+      // text is intact — and silently wedging the entire sync is not defensible under any reading.
+      created_at: typeof rec.created_at === 'string' ? rec.created_at : nowIso(),
+      // NO fallback to now() here, unlike created_at. `updated_at` is the ORDERING key for
+      // last-writer-wins, so stamping a malformed one with the current time does not degrade it --
+      // it promotes it above every note you have. Measured: a record dated 2001 carrying
+      // `updated_at: {}` overwrote a newer local note. Such a record is refused outright above.
+      updated_at: rec.updated_at,
+      // Self-heal legacy rows: a category whose TTL is null (e.g. todo) is dismissal-only,
+      // so drop any stale expires_at that an older version wrote — otherwise the row keeps
+      // getting swept to 'stale' on every read. New expiries for TTL'd categories pass through.
+      expires_at: CATEGORY_TTL_DAYS[rec.category] == null
+        ? null
+        : (typeof rec.expires_at === 'string' ? rec.expires_at : null),
+      source: rec.source === 'manual' ? 'manual' : 'auto',
+      origin: normalizeOrigin(rec.origin),
+      session_id: rec.session_id ? String(rec.session_id) : null,
+      due_at: normalizeDueAt(rec.due_at),
+      status: ['active', 'stale', 'dismissed'].includes(rec.status) ? rec.status : 'active',
+      // Redacted and capped like content, and for exactly the same reason. This field came in
+      // RAW from the sync document — untrusted text written by anyone who can push to the shared
+      // repo — so a credential in a peer's dismiss reason was stored in the local plaintext DB and
+      // then re-published by the next `exportAllRows`. It was also the one uncapped string on this
+      // path, which is what let a 60 KB reason through.
+      dismiss_reason: rec.dismiss_reason == null ? null : redactAndCap(rec.dismiss_reason, MAX_CONTENT_LENGTH).text,
+    };
+  } catch {
+    return 'skipped';
+  }
 
   const existing = db.prepare('SELECT updated_at FROM stickies WHERE id = ?').get(row.id);
   if (!existing) {

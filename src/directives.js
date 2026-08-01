@@ -92,7 +92,25 @@ export function scanDirectives(text) {
   const ignored = { fenced: 0, indented: 0, malformed: 0 };
   if (!text || typeof text !== 'string') return { directives: [], ignored };
   const out = [];
-  const lines = text.split(/\r?\n/);
+  // `/\r\n|\n|\r/`, matching src/flow/derive-gsd.mjs and src/flow/writeback.mjs — the other two
+  // consumers of the shared fence scanner — and matching CommonMark, which treats a bare CR as a
+  // line ending.
+  //
+  // While these disagreed, a bare CR did not end a line HERE but did everywhere else, so the
+  // scanner was handed a "line" no other component would recognise. That was not cosmetic: a
+  // hostile README using an old-style CR could glue a fence marker onto the previous line (so no
+  // fence was ever detected) or glue its own text onto the fence-open line (so a backtick in that
+  // text tripped the info-string guard and the fence refused to open). Either way the block that
+  // every Markdown renderer shows as a code block was invisible here, and a `!!sticky … global ::`
+  // line the model was only QUOTING got written as a note visible in every project on the machine —
+  // reported to the user as "captured 1 sticky", never as a refusal. Verified against the reference
+  // CommonMark parser, and in repo-mode the same note was git-committed into the user's own repo.
+  //
+  // U+2028/U+2029 are deliberately NOT added here. They are not CommonMark line endings, adding
+  // them opened two new divergences on fence-CLOSE lines, and fences.mjs already absorbs them into
+  // the info string. The rule is "agree with the other consumers and with CommonMark", not "split
+  // on everything that looks blank".
+  const lines = text.split(/\r\n|\n|\r/);
   // One pass over the whole document, by the shared scanner, before any line is judged. A fence
   // is a property of the document, not of the line — which is exactly what the toggle this
   // replaced got wrong.

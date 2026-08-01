@@ -262,11 +262,18 @@ check(engineBehind.length === 0,
   const armored = '-----BEGIN OPENSSH PRIVATE KEY-----\n'
     + Array.from({ length: 5 }, () => 'Comment:' + ' '.repeat(70)).join('\n')
     + '\nnot-base64-!!';
+  // The bound here is 200 ms, not the 1000 ms the two assertions above use, and the difference is
+  // deliberate. Those two guard inputs whose honest cost is milliseconds; this one guards an input
+  // whose honest cost is ~0.5 ms against a regression that measured 69–125 SECONDS. A 1000 ms bound
+  // would still catch the full regression, but it would wave through a partial one — a change that
+  // made this 100× slower and still "passed" — which is exactly the kind of silent erosion this
+  // file exists to stop. 200 ms keeps roughly 400× headroom over the measured truth, which is ample
+  // for a loaded laptop, while refusing anything that has started to grow again.
   check(armored.length <= 500, `the payload is a legal note (${armored.length} chars, cap 500)`);
   const t2 = Date.now();
   redactSecrets(armored);
   const ms3 = Date.now() - t2;
-  check(ms3 < 1000, `armor headers padded with spaces and no key data scan in well under a second (${ms3} ms)`);
+  check(ms3 < 200, `armor headers padded with spaces and no key data scan in ~no time (${ms3} ms, bound 200)`);
 }
 
 // --- redacting twice must not eat the text between the markers -------------------------------

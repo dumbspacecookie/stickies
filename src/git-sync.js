@@ -140,51 +140,32 @@ export function sync({ repo = resolveSyncRepo(), file } = {}) {
     steps.push(commit.code === 0 ? 'commit: ok' : `commit: failed (${commit.err.split('\n')[0]})`);
     // 5. Push if there is a remote.
     if (remote) {
-      // Push exactly the commit we just made, and nothing else.
+      // STICKIES DOES NOT PUSH BY DEFAULT.
       //
-      // What this fixes: `push -u origin HEAD` on a branch with NO upstream CREATES that branch
-      // on the remote, so a half-finished WIP branch got published as a side effect of taking a
-      // note. We no longer invent an upstream — we say so and stop, because guessing which remote
-      // branch someone meant is not ours to guess.
+      // This function has now had three distinct push bugs across two attempts, and they were not
+      // careless -- each was a locally reasonable answer to "where should this commit go?":
+      //   1. `push -u origin HEAD` CREATED the branch on the remote, publishing a WIP branch as a
+      //      side effect of taking a note;
+      //   2. reading @{u} and pushing to its branch wrote a `wip` branch onto shared `main`, which
+      //      is worse -- a stray branch can be ignored, main is what the team pulls;
+      //   3. using @{u}'s remote as the PUSH remote sends your notes to the project you FORKED
+      //      FROM, because `remote.pushDefault` and `branch.<n>.pushRemote` exist precisely so that
+      //      fetch and push can differ. Verified: git pushes to `fork`, this pushed to `origin`.
       //
-      // What it does NOT fix, and cannot: if the user has unpushed commits of their own beneath
-      // ours, pushing ours pushes theirs too. Git sends a commit with all its ancestors; there is
-      // no refspec that says "just this one". The honest mitigation is a dedicated sync repo,
-      // which is what the docs recommend — not a cleverer push.
-      // This is `push.default=simple`, and it is git's default for a reason: push to the tracked
-      // branch ONLY when it has the same name as the branch you are standing on.
+      // The lesson is that the question has more of the user's git configuration in it than any
+      // reimplementation can hold, and getting it wrong writes to a repository other people share.
+      // So the answer is no longer ours to give. Taking a note COMMITS to your sync repo and stops.
+      // Nothing leaves the machine unless you ask for it, which also makes the default match what
+      // SECURITY.md already tells people to expect.
       //
-      // The previous version read @{u}, stripped a literal `origin/`, and pushed `HEAD:<rest>`.
-      // Three ways that went wrong, all reproduced:
-      //   1. `git checkout -b wip origin/main` — the ordinary way to start a branch — sets
-      //      @{u}=origin/main, so taking a NOTE pushed the wip branch onto shared `main`. That is
-      //      worse than the stray-branch bug this code replaced: a stray branch can be ignored,
-      //      main is what everyone pulls. In repo-mode it fires from a Stop hook, unattended.
-      //   2. On a fork (origin=your fork, upstream=source), @{u}=upstream/main, the strip is a
-      //      no-op, and `push origin HEAD:upstream/main` CREATES a branch literally named
-      //      "upstream/main" on your fork — the exact class the change was meant to end.
-      //   3. With any remote not called `origin`, every push failed forever against a hardcoded
-      //      `origin` while the CLI still printed "auto-synced".
-      // Parsing the remote out of @{u} instead of assuming `origin` fixes 2 and 3; requiring the
-      // names to match fixes 1. When they differ we do nothing and say which branch we declined to
-      // write to — guessing is what caused this.
-      const upstream = git(repo, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
-      if (upstream.code !== 0) {
-        steps.push('push: skipped (no upstream — run `git push -u origin <branch>` once yourself)');
+      // Opting in runs `git push` with NO refspec and NO remote -- git then applies push.default,
+      // pushRemote, pushDefault and your branch's own configuration, so it goes exactly where your
+      // own `git push` would send it. We are not re-deriving that policy; we are deferring to it.
+      if (process.env.STICKIES_SYNC_PUSH !== '1') {
+        steps.push('push: skipped (commit only — set STICKIES_SYNC_PUSH=1 to push automatically)');
       } else {
-        const up = upstream.out.trim();
-        const cut = up.indexOf('/');
-        const remoteName = cut > 0 ? up.slice(0, cut) : 'origin';
-        const branch = cut > 0 ? up.slice(cut + 1) : up;
-        const current = git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']).out.trim();
-        if (!current || current === 'HEAD') {
-          steps.push('push: skipped (detached HEAD — nothing to push to)');
-        } else if (branch !== current) {
-          steps.push(`push: skipped (${current} tracks ${up}; pushing would write ${current} onto ${branch})`);
-        } else {
-          const push = git(repo, ['push', remoteName, `HEAD:${branch}`]);
-          steps.push(push.code === 0 ? 'push: ok' : `push: failed (${(push.err || push.out).split('\n')[0]})`);
-        }
+        const push = git(repo, ['push']);
+        steps.push(push.code === 0 ? 'push: ok' : `push: failed (${(push.err || push.out).split('\n')[0]})`);
       }
     }
   } else {

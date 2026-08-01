@@ -42,9 +42,11 @@ const ARMOR_HEADER = '(?:Version|Comment|MessageID|Hash|Charset|Proc-Type|DEK-In
 // — the header tail and the trailing HWS BOTH match horizontal whitespace, so a header line padded
 // with W spaces has W+1 equally valid splits between them. `{0,8}` nests that up to eight deep, and
 // the base64 group that follows fails whenever the next line is not key data, which forces the
-// engine to enumerate all W^N of them. Measured on the shipped build: a 294-char note took 2.6s, a
-// 444-char note took 125s, and both are UNDER the 500-character limit that `createSticky` checks
-// BEFORE redaction runs — so the cap is not a defence. `upsertFromSync` has no length gate at all.
+// engine to enumerate all W^N of them. Measured on the shipped build: a 294-char note took 2.6s and
+// a 444-char note took 125s (69s on a second machine) — both UNDER the 500-character limit that
+// `createSticky` checks BEFORE redaction runs, so the cap was never a defence against this. The
+// scan window IS bounded — redactAndCap slices to `cap + SCAN_SLACK` (1524) before calling — but a
+// bound only helps a cost that grows with length, and this one peaked well inside a legal note.
 // As an alternation the branches cannot both claim the same space, each backtrack step dies against
 // the next EOL immediately, and the cost is linear. Matching behaviour is unchanged: branch 1 eats a
 // header line including its trailing spaces, branch 2 eats a blank-or-whitespace line, and an

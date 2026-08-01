@@ -125,7 +125,7 @@ function saveStore(store) {
 //
 // The stamp fingerprints those regions so `stickies doctor` can tell a user that the engine
 // committed in their repo predates a redactor fix and needs `stickies init-repo` re-run.
-const ENGINE_STAMP = '415a218a5538';
+const ENGINE_STAMP = 'c5c4ee9b4a17';
 
 // <<<GENERATED:redact — copied from src/redact.js by scripts/build-engine.mjs. DO NOT EDIT HERE.>>>
 // Conservative secret scrubbing applied to sticky content (and tags) before they are
@@ -172,9 +172,11 @@ const ARMOR_HEADER = '(?:Version|Comment|MessageID|Hash|Charset|Proc-Type|DEK-In
 // — the header tail and the trailing HWS BOTH match horizontal whitespace, so a header line padded
 // with W spaces has W+1 equally valid splits between them. `{0,8}` nests that up to eight deep, and
 // the base64 group that follows fails whenever the next line is not key data, which forces the
-// engine to enumerate all W^N of them. Measured on the shipped build: a 294-char note took 2.6s, a
-// 444-char note took 125s, and both are UNDER the 500-character limit that `createSticky` checks
-// BEFORE redaction runs — so the cap is not a defence. `upsertFromSync` has no length gate at all.
+// engine to enumerate all W^N of them. Measured on the shipped build: a 294-char note took 2.6s and
+// a 444-char note took 125s (69s on a second machine) — both UNDER the 500-character limit that
+// `createSticky` checks BEFORE redaction runs, so the cap was never a defence against this. The
+// scan window IS bounded — redactAndCap slices to `cap + SCAN_SLACK` (1524) before calling — but a
+// bound only helps a cost that grows with length, and this one peaked well inside a legal note.
 // As an alternation the branches cannot both claim the same space, each backtrack step dies against
 // the next EOL immediately, and the cost is linear. Matching behaviour is unchanged: branch 1 eats a
 // header line including its trailing spaces, branch 2 eats a blank-or-whitespace line, and an
@@ -549,7 +551,25 @@ function scanDirectives(text) {
   const ignored = { fenced: 0, indented: 0, malformed: 0 };
   if (!text || typeof text !== 'string') return { directives: [], ignored };
   const out = [];
-  const lines = text.split(/\r?\n/);
+  // `/\r\n|\n|\r/`, matching src/flow/derive-gsd.mjs and src/flow/writeback.mjs — the other two
+  // consumers of the shared fence scanner — and matching CommonMark, which treats a bare CR as a
+  // line ending.
+  //
+  // While these disagreed, a bare CR did not end a line HERE but did everywhere else, so the
+  // scanner was handed a "line" no other component would recognise. That was not cosmetic: a
+  // hostile README using an old-style CR could glue a fence marker onto the previous line (so no
+  // fence was ever detected) or glue its own text onto the fence-open line (so a backtick in that
+  // text tripped the info-string guard and the fence refused to open). Either way the block that
+  // every Markdown renderer shows as a code block was invisible here, and a `!!sticky … global ::`
+  // line the model was only QUOTING got written as a note visible in every project on the machine —
+  // reported to the user as "captured 1 sticky", never as a refusal. Verified against the reference
+  // CommonMark parser, and in repo-mode the same note was git-committed into the user's own repo.
+  //
+  // U+2028/U+2029 are deliberately NOT added here. They are not CommonMark line endings, adding
+  // them opened two new divergences on fence-CLOSE lines, and fences.mjs already absorbs them into
+  // the info string. The rule is "agree with the other consumers and with CommonMark", not "split
+  // on everything that looks blank".
+  const lines = text.split(/\r\n|\n|\r/);
   // One pass over the whole document, by the shared scanner, before any line is judged. A fence
   // is a property of the document, not of the line — which is exactly what the toggle this
   // replaced got wrong.

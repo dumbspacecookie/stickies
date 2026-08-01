@@ -31,7 +31,7 @@
 
 import { readFileSync } from 'node:fs';
 import { scanDirectives } from './directives.js';
-import { createSticky } from './store.js';
+import { createSticky, stripControl } from './store.js';
 import { getDb, MAX_CONTENT_LENGTH, MAX_TAGS, MAX_TAG_LENGTH } from './db.js';
 import { redactAndCap } from './redact.js';
 import { isUnsafeProjectPath, normalizeProjectPath, projectIdentity } from './store-path.js';
@@ -134,26 +134,9 @@ function lastTurnAssistantText(transcriptPath) {
 // becoming the literal character, and the literal U+2028 IS a line terminator to the JS
 // parser, so the file simply stops loading. scripts/gate.mjs refuses literal invisibles in
 // src/ for that reason. Numbers cannot be mistyped invisibly.
-const CONTROL_RANGES = [
-  [0x00, 0x1f], // C0 controls, including NUL, CR and LF
-  [0x7f, 0x9f], // DEL and the C1 controls
-  [0x2028, 0x2029], // LINE SEPARATOR / PARAGRAPH SEPARATOR
-];
-
-function isControl(code) {
-  for (const [lo, hi] of CONTROL_RANGES) if (code >= lo && code <= hi) return true;
-  return false;
-}
-
-function stripControl(value) {
-  let out = '';
-  for (const ch of String(value ?? '')) {
-    const code = ch.codePointAt(0);
-    if (code === 9) out += ' '; // tab: a separator, so keep the separation
-    else if (!isControl(code)) out += ch;
-  }
-  return out.trim();
-}
+// stripControl now lives in src/store.js and is imported above. It was defined HERE, which meant
+// it protected exactly one caller -- this hook -- while stickies_write, the CLI, the dashboard
+// and upsertFromSync all wrote past it. One rule, at the layer every write goes through.
 
 // Make the tags storable instead of letting them kill the note.
 //
