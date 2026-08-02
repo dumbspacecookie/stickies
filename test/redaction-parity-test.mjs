@@ -294,7 +294,27 @@ check(engineBehind.length === 0,
     check(r.redacted, `an armored key with ${n} header line(s) is redacted`);
     check(!r.text.includes('MIIEpAIBAAKCAQEA'), `and no key material survives it (${n} headers)`);
   }
-  // Still linear, and still bounded: a pathological header run must not cost real time.
+  // Still linear, and still bounded. The terminator here is CRLF, not LF, and that is the entire
+  // value of this assertion: the first version joined with LF and passed at 0 ms against a
+  // deliberately sabotaged bound, because LF has only one parse. A Windows line break had two --
+  // the pair, or a lone CR with the next repetition taking the LF -- so every boundary doubled the
+  // paths once the ceiling was raised from 8 to 64. Measured before the fix: 108 characters in
+  // 3.5 seconds, 118 in over three minutes, while the same shapes in LF stayed under a
+  // millisecond. ROADMAP.md is natively CRLF on Windows, so this is the common case, not an
+  // exotic one. A timing test that only exercises the unambiguous terminator is theatre.
+  for (const [label, eol] of [['CRLF', '\r\n'], ['LF', '\n'], ['lone CR', '\r']]) {
+    // 32, not 40, and the number is load-bearing. The cost of the defect is exponential in this
+    // count, so a large value does not fail the assertion -- it HANGS the suite, which reads as a
+    // stuck CI job rather than a red test. Measured against the ambiguous terminator: 30 lines
+    // cost 220ms, 34 cost 3.5s, 40 never finished. 32 sits comfortably over the 200ms bound while
+    // still returning in about a second, so a regression here goes RED instead of going quiet.
+    const pathological = '-----BEGIN PGP PRIVATE KEY BLOCK-----' + eol.repeat(32) + '!!!';
+    check(pathological.length <= 500, `the ${label} payload is a legal note (${pathological.length} chars)`);
+    const t0 = Date.now();
+    redactSecrets(pathological);
+    const el = Date.now() - t0;
+    check(el < 200, `32 ${label} blank lines after a key header scan in ~no time (${el} ms)`);
+  }
   const t = Date.now();
   redactSecrets(armored(200));
   const ms = Date.now() - t;

@@ -22,7 +22,26 @@ const CONNECTION_URI = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]*:[^\s@/]+@/gi;
 //     pasted through a tool that normalises to them still LOOKS like a key block on screen.
 // Written as escapes because a literal U+2028 in this file would end the line mid-regex — the
 // same reason the gate refuses invisible characters in source.
-const EOL = '(?:\\r\\n|[\\n\\r\\u0085\\u2028\\u2029])';
+// CR appears TWICE on purpose, and the negative lookahead is the whole point.
+//
+// Written the obvious way -- CRLF, or a class containing both CR and LF -- a Windows line break can
+// be matched TWO ways: as the pair in one step, or as the CR alone from the class, after which the
+// branch that matches nothing lets the NEXT repetition consume the LF. Same end position, different
+// iteration count. Every CRLF boundary therefore doubles the number of paths, and the engine
+// enumerates all of them whenever the base64 group that follows fails to match.
+//
+// That ambiguity was always here. It was harmless only because the repetition was bounded at 8;
+// raising the ceiling to 64 to close the nine-header key leak is what armed it. Measured on the
+// raised bound: a 108-character note took 3.5 SECONDS and a 118-character one over three minutes,
+// while the identical shapes written with LF took under a millisecond. It is reachable from
+// dismissSticky, from an untrusted dismiss_reason in a shared sync document, from the Discord path,
+// and from repo-mode reading a Markdown file -- and ROADMAP.md is natively CRLF on Windows.
+//
+// Matching a lone CR only when it is NOT followed by LF, and dropping CR from the class, gives a
+// Windows line break exactly one parse and restores linear cost. This is the THIRD performance
+// defect in this file, and all three were an AMBIGUITY rather than an expensive operation: two ways
+// to match the same text is the thing to look for here, not a construct that looks slow.
+const EOL = '(?:\\r\\n|\\r(?!\\n)|[\\n\\u0085\\u2028\\u2029])';
 // Horizontal whitespace: everything `\s` covers EXCEPT a line terminator. `[^\S\n]` — the obvious
 // spelling — is wrong here, because \r and U+2028 are whitespace that is "not \n", so that class
 // eats the very break the next group is waiting for and the match dies one character too late.
