@@ -60,22 +60,31 @@ export function fencedLineFlags(lines) {
       // not itself contain a backtick when the fence is backticks (CommonMark forbids it, and it
       // is how ``` `code` ``` inline spans get misread as fences).
       //
-      // The backtick test looks at the FIRST WHITESPACE-DELIMITED WORD of the info string, not the
-      // whole of it, and that distinction is a security boundary rather than pedantry. Scanning the
-      // whole string, a hostile file could write ```<U+2028>has a ` tick — the terminator is
-      // absorbed into the info string (see FENCE_OPEN above), the stray backtick further along then
-      // tripped this guard, the fence refused to OPEN, and every line after it read as unfenced. A
-      // `!!sticky … global ::` line the model was merely QUOTING got written as a note visible in
-      // every project on the machine, with nothing reported as refused.
+      // The test scans the WHOLE info string, and an attempt to narrow it to the first word was
+      // REVERTED — it is recorded here because the narrowed version looked obviously right.
       //
-      // The first word is also what the info string MEANS — it is the language tag, which is why
-      // ```js is `js`. Testing it keeps the case this guard exists for: for ``` `code` ``` the first
-      // word IS `code`, backtick and all, so an inline span still refuses to open a fence.
+      // The reasoning was: an info string means its first word (```js is `js`), so testing further
+      // along was over-strict and let a U+2028-plus-backtick line block a fence from opening. True,
+      // but it made this scanner MORE EAGER to open than any real renderer: ```js `x has a clean
+      // first word, so a fence opened where commonmark, markdown-it and marked all open none. The
+      // genuine ``` three lines later was then consumed as that fence's CLOSE rather than its open,
+      // and every following line — text a reader plainly sees as quoted code — read as unfenced. A
+      // `!!sticky ... global ::` line from a hostile README was executed and filed into every
+      // project on the machine, reporting nothing refused. Reproduced end to end through the real
+      // hook; the previous release refused the identical document.
       //
-      // Failing toward "this is a fence" is the safe direction. A false fence costs a directive the
-      // model wanted captured; a missed fence executes one it was only quoting.
-      const info = m ? m[2].trim().split(/\s/)[0] : '';
-      if (m && !(m[1][0] === '`' && info.includes('`'))) {
+      // CommonMark is explicit that a backtick fence's info string may not contain a backtick
+      // anywhere, so the whole-string test IS the specification. Being more eager to open is not the
+      // safe direction after all: over-opening flips the open/close parity of everything downstream,
+      // which turns quoted text into spoken text — the precise inversion this scanner exists to
+      // stop. It also empties the board, because a ROADMAP.md with a stray backtick on a fence line
+      // swallows every later phase heading.
+      //
+      // The shape that prompted the change is a U+2028 sitting inside the info string, and the real
+      // fix is upstream of here: normalise U+2028/U+2029 to a newline before anything is called a
+      // "line", so the scanner never meets one. That is a larger change than a release should carry.
+      // so the scanner never meets one. That is a larger change than a release should carry.
+      if (m && !(m[1][0] === '`' && m[2].includes('`'))) {
         marker = m[1];
         flags[i] = true;
       }

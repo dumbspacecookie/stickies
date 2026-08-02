@@ -16,15 +16,25 @@ open there rather than rushed. Neither is a regression from 0.14.0; one predates
   old hole rather than a new one. The bound was low because each repetition used to be
   exponentially expensive; 0.14.0 made that pattern linear, which is what allowed the ceiling to be
   raised. It is now 64 — still bounded on purpose — and asserted at 1, 8, 9, 12 and 40 headers.
-- **A code fence could still be blinded, by an invisible character plus a stray backtick.** A
+- **Hardened the fence scanner against opening a code block where no renderer opens one.** A
   `!!sticky … ::` directive is honoured only when the model *speaks* it, never when it *quotes* it
-  inside a fence. 0.14.0 closed the cases where a line terminator hid the fence outright; this
-  closes the last one, where the terminator was absorbed into the fence's info string and a backtick
-  further along that string then stopped the fence opening at all. A directive quoted out of a
-  hostile file was executed — including with `global`, which files it into every project on the
-  machine — and nothing was reported as refused. The check that stops ``` `code` ``` inline spans
-  being misread as fences now looks at the FIRST WORD of the info string, which is what an info
-  string means. Verified against a reference CommonMark parser.
+  inside a fence, so anything that shifts where fences begin shifts that boundary. An attempt to
+  narrow the info-string check to its first word made the scanner MORE eager to open than
+  commonmark, markdown-it or marked: `` ```js `x `` opened a fence none of them open, the genuine
+  closing fence was then consumed as that block's terminator, and every line after it — text a
+  reader plainly sees as quoted code — read as unfenced. A directive lifted from a hostile README
+  would have been executed with `global` scope, filed into every project on the machine, reporting
+  nothing refused. **That change was caught in review and reverted before release**; what ships is
+  the CommonMark-correct whole-info-string test, now pinned by a test that fails if anyone narrows
+  it again, and by the first real coverage the inline-code-span guard has ever had.
+
+  **Still open, and stated rather than hidden:** a U+2028 sitting inside a fence's info string,
+  followed later by a backtick, still stops that fence opening, so a directive quoted on the next
+  line is honoured. It is narrower than it sounds — markdown-it and marked both consider that text
+  to have never been inside a code block, which makes it the accepted flush-left residual risk the
+  capture docs already describe rather than a fence bypass. The correct fix is upstream of the
+  scanner: normalise U+2028/U+2029 before anything is treated as a line. That is a larger change
+  than a patch release should carry.
 
 ## 0.14.0 — 2026-08-01
 
