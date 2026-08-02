@@ -62,7 +62,12 @@ stickies add <text> [-c category] [-i P1|P2|P3] [-t tag1,tag2] [-d due] [--proje
 
 **Example 1** — a follow-up the user tossed out mid-task:
 Input: "remind me to rotate the staging API key before Friday"
-Command: `npx -p stickies-mcp stickies add "rotate the staging API key" -c todo -i P1 -d 2026-07-25`
+Command: `npx -p stickies-mcp stickies add "rotate the staging API key" -c todo -i P1 -d 1w`
+
+Prefer a relative deadline (`1w`, `2d`, `tomorrow`) over a literal `YYYY-MM-DD` unless the user
+named an actual date. A hard-coded date in an example is a date that quietly becomes the past —
+this one shipped reading `2026-07-25`, which by the time anyone read it was a deadline already
+missed, and a model copying the example writes a note that is stale the moment it is saved.
 
 **Example 2** — recording a decision so the reasoning survives:
 Input: "let's go with Postgres over SQLite for the multiplayer backend, we need concurrent writes"
