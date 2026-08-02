@@ -2,7 +2,31 @@
 
 Notable changes to Stickies. Versions follow the npm package `stickies-mcp`.
 
-## 0.14.0 — 2026-07-31
+## 0.14.1 — 2026-08-01
+
+Two security fixes, both surfaced by the same review that cleared 0.14.0 and both deliberately left
+open there rather than rushed. Neither is a regression from 0.14.0; one predates it entirely.
+
+### Fixed
+
+- **A private key carrying nine or more armor headers was stored in clear.** The pattern that
+  recognises a pasted key allowed up to eight `Version:`/`Comment:` header lines and then gave up,
+  so a real export with more of them was written to the store verbatim, reported as not redacted,
+  and published to whatever sync repo you had configured. This was true of 0.13.0 too, so it is an
+  old hole rather than a new one. The bound was low because each repetition used to be
+  exponentially expensive; 0.14.0 made that pattern linear, which is what allowed the ceiling to be
+  raised. It is now 64 — still bounded on purpose — and asserted at 1, 8, 9, 12 and 40 headers.
+- **A code fence could still be blinded, by an invisible character plus a stray backtick.** A
+  `!!sticky … ::` directive is honoured only when the model *speaks* it, never when it *quotes* it
+  inside a fence. 0.14.0 closed the cases where a line terminator hid the fence outright; this
+  closes the last one, where the terminator was absorbed into the fence's info string and a backtick
+  further along that string then stopped the fence opening at all. A directive quoted out of a
+  hostile file was executed — including with `global`, which files it into every project on the
+  machine — and nothing was reported as refused. The check that stops ``` `code` ``` inline spans
+  being misread as fences now looks at the FIRST WORD of the info string, which is what an info
+  string means. Verified against a reference CommonMark parser.
+
+## 0.14.0 — 2026-08-01
 
 A bug-fix release, and an admission: every defect below shipped in a release whose test suite was
 green. Green is not the bar any more — `npm run gate` is, and it is now armed on push.

@@ -276,6 +276,31 @@ check(engineBehind.length === 0,
   check(ms3 < 200, `armor headers padded with spaces and no key data scan in ~no time (${ms3} ms, bound 200)`);
 }
 
+// --- an armored key is redacted however many header lines it carries ------------------------
+//
+// The repetition bound used to be {0,8}, so a key with NINE armor headers fell off the end of the
+// pattern and the whole thing was stored in clear -- redacted=false, key material intact. Present in
+// 0.13.0 too, so this is an old hole rather than a new one, and it is a credential written to a
+// plaintext store and then published to whatever sync repo the user configured. The bound was low
+// because each iteration was once exponentially expensive; the alternation made it linear, so the
+// ceiling could be raised. Both ends are asserted: the key must be caught, and the bound must still
+// be a bound.
+{
+  const armored = (n) => '-----BEGIN RSA PRIVATE KEY-----\n'
+    + Array.from({ length: n }, (_, i) => `Comment: header line ${i}`).join('\n')
+    + '\nMIIEpAIBAAKCAQEAx0123456789abcdefGHIJKLMNOPqrst';
+  for (const n of [1, 8, 9, 12, 40]) {
+    const r = redactSecrets(armored(n));
+    check(r.redacted, `an armored key with ${n} header line(s) is redacted`);
+    check(!r.text.includes('MIIEpAIBAAKCAQEA'), `and no key material survives it (${n} headers)`);
+  }
+  // Still linear, and still bounded: a pathological header run must not cost real time.
+  const t = Date.now();
+  redactSecrets(armored(200));
+  const ms = Date.now() - t;
+  check(ms < 200, `200 header lines still scan in ~no time (${ms} ms)`);
+}
+
 // --- redacting twice must not eat the text between the markers -------------------------------
 //
 // Redaction is not a single pass any more: store.js scrubs on the way in, notify.js scrubs again

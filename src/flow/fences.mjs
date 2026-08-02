@@ -59,7 +59,23 @@ export function fencedLineFlags(lines) {
       // An opening fence: a run of 3+ of one character. An info string may follow, but it must
       // not itself contain a backtick when the fence is backticks (CommonMark forbids it, and it
       // is how ``` `code` ``` inline spans get misread as fences).
-      if (m && !(m[1][0] === '`' && m[2].includes('`'))) {
+      //
+      // The backtick test looks at the FIRST WHITESPACE-DELIMITED WORD of the info string, not the
+      // whole of it, and that distinction is a security boundary rather than pedantry. Scanning the
+      // whole string, a hostile file could write ```<U+2028>has a ` tick — the terminator is
+      // absorbed into the info string (see FENCE_OPEN above), the stray backtick further along then
+      // tripped this guard, the fence refused to OPEN, and every line after it read as unfenced. A
+      // `!!sticky … global ::` line the model was merely QUOTING got written as a note visible in
+      // every project on the machine, with nothing reported as refused.
+      //
+      // The first word is also what the info string MEANS — it is the language tag, which is why
+      // ```js is `js`. Testing it keeps the case this guard exists for: for ``` `code` ``` the first
+      // word IS `code`, backtick and all, so an inline span still refuses to open a fence.
+      //
+      // Failing toward "this is a fence" is the safe direction. A false fence costs a directive the
+      // model wanted captured; a missed fence executes one it was only quoting.
+      const info = m ? m[2].trim().split(/\s/)[0] : '';
+      if (m && !(m[1][0] === '`' && info.includes('`'))) {
         marker = m[1];
         flags[i] = true;
       }

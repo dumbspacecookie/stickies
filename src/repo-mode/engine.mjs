@@ -125,7 +125,7 @@ function saveStore(store) {
 //
 // The stamp fingerprints those regions so `stickies doctor` can tell a user that the engine
 // committed in their repo predates a redactor fix and needs `stickies init-repo` re-run.
-const ENGINE_STAMP = 'c5c4ee9b4a17';
+const ENGINE_STAMP = 'ae65b646fab4';
 
 // <<<GENERATED:redact — copied from src/redact.js by scripts/build-engine.mjs. DO NOT EDIT HERE.>>>
 // Conservative secret scrubbing applied to sticky content (and tags) before they are
@@ -184,8 +184,16 @@ const ARMOR_HEADER = '(?:Version|Comment|MessageID|Hash|Charset|Proc-Type|DEK-In
 // Do NOT "simplify" HWS to `[^\S\n]` or `\s*` — see the note on HWS above; that reintroduces a
 // leak, not a slowdown. Re-run the timing assertions in test/redaction-parity-test.mjs after any
 // edit here.
+// THE REPETITION BOUND IS 64, NOT 8. At 8 the pattern gave up on any key carrying nine or more
+// armor headers and the entire private key was stored in clear -- redacted=false, key material
+// intact. That was true of 0.13.0 as well, so it is old rather than newly introduced, but it is a
+// credential written to a plaintext store and then published to whatever sync repo the user
+// configured. The bound was low because each iteration used to be exponentially expensive; as an
+// alternation it is linear, so the ceiling can be generous. It stays a ceiling rather than `*`,
+// because an unbounded repetition over untrusted input is how this file earned its previous two
+// performance defects, and no real armored key carries 64 header lines.
 const ARMOR_PREAMBLE =
-  `(?:${EOL}(?:${ARMOR_HEADER}:[^\\n\\r\\u0085\\u2028\\u2029]*|${HWS})){0,8}`;
+  `(?:${EOL}(?:${ARMOR_HEADER}:[^\\n\\r\\u0085\\u2028\\u2029]*|${HWS})){0,64}`;
 
 // 2. Known token shapes — the whole match is a secret, replaced wholesale.
 const TOKEN_PATTERNS = [
@@ -434,7 +442,23 @@ function fencedLineFlags(lines) {
       // An opening fence: a run of 3+ of one character. An info string may follow, but it must
       // not itself contain a backtick when the fence is backticks (CommonMark forbids it, and it
       // is how ``` `code` ``` inline spans get misread as fences).
-      if (m && !(m[1][0] === '`' && m[2].includes('`'))) {
+      //
+      // The backtick test looks at the FIRST WHITESPACE-DELIMITED WORD of the info string, not the
+      // whole of it, and that distinction is a security boundary rather than pedantry. Scanning the
+      // whole string, a hostile file could write ```<U+2028>has a ` tick — the terminator is
+      // absorbed into the info string (see FENCE_OPEN above), the stray backtick further along then
+      // tripped this guard, the fence refused to OPEN, and every line after it read as unfenced. A
+      // `!!sticky … global ::` line the model was merely QUOTING got written as a note visible in
+      // every project on the machine, with nothing reported as refused.
+      //
+      // The first word is also what the info string MEANS — it is the language tag, which is why
+      // ```js is `js`. Testing it keeps the case this guard exists for: for ``` `code` ``` the first
+      // word IS `code`, backtick and all, so an inline span still refuses to open a fence.
+      //
+      // Failing toward "this is a fence" is the safe direction. A false fence costs a directive the
+      // model wanted captured; a missed fence executes one it was only quoting.
+      const info = m ? m[2].trim().split(/\s/)[0] : '';
+      if (m && !(m[1][0] === '`' && info.includes('`'))) {
         marker = m[1];
         flags[i] = true;
       }

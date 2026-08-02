@@ -54,8 +54,16 @@ const ARMOR_HEADER = '(?:Version|Comment|MessageID|Hash|Charset|Proc-Type|DEK-In
 // Do NOT "simplify" HWS to `[^\S\n]` or `\s*` — see the note on HWS above; that reintroduces a
 // leak, not a slowdown. Re-run the timing assertions in test/redaction-parity-test.mjs after any
 // edit here.
+// THE REPETITION BOUND IS 64, NOT 8. At 8 the pattern gave up on any key carrying nine or more
+// armor headers and the entire private key was stored in clear -- redacted=false, key material
+// intact. That was true of 0.13.0 as well, so it is old rather than newly introduced, but it is a
+// credential written to a plaintext store and then published to whatever sync repo the user
+// configured. The bound was low because each iteration used to be exponentially expensive; as an
+// alternation it is linear, so the ceiling can be generous. It stays a ceiling rather than `*`,
+// because an unbounded repetition over untrusted input is how this file earned its previous two
+// performance defects, and no real armored key carries 64 header lines.
 const ARMOR_PREAMBLE =
-  `(?:${EOL}(?:${ARMOR_HEADER}:[^\\n\\r\\u0085\\u2028\\u2029]*|${HWS})){0,8}`;
+  `(?:${EOL}(?:${ARMOR_HEADER}:[^\\n\\r\\u0085\\u2028\\u2029]*|${HWS})){0,64}`;
 
 // 2. Known token shapes — the whole match is a secret, replaced wholesale.
 const TOKEN_PATTERNS = [
