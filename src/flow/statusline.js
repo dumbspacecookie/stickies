@@ -12,6 +12,7 @@ import { resolveStatuslineTheme, statuslinePalette } from '../statusline.js';
 import { normalizeProjectPath } from '../store-path.js';
 import { authorizedUrl } from '../dashboard-auth.js';
 import { dashboardPort } from '../dashboard-port.js';
+import { dashboardLikelyUp } from '../dashboard-liveness.js';
 
 const ESC = '\x1b[';
 const BOLD = `${ESC}1m`;
@@ -91,13 +92,18 @@ async function main() {
   // Skipped under tmux (mangles OSC 8) and with --no-link (pass --no-link if OSC 8
   // interferes with select-to-copy in your terminal).
   //
+  // Also skipped when no dashboard is listening. Autostart is opt-in, so on most machines —
+  // and on any machine that has rebooted since the last `stickies dashboard` — there is
+  // nothing on the port, and an underlined link to it is a promise the click cannot keep.
+  // Plain text is the honest render; `stickies doctor` says how to get the link back.
+  //
   // ?project= is what makes the click honest. The counts above are computed from THIS
   // terminal's cwd, but one dashboard serves the whole machine — so a bare /board link
   // opened whichever project happened to launch the server, showing another folder's plans
   // under this folder's numbers. Naming the project makes the page match the segment.
-  const linkable = line && !flag('--no-link') && !process.env.TMUX;
+  const port = dashboardPort();
+  const linkable = line && !flag('--no-link') && !process.env.TMUX && dashboardLikelyUp(port);
   if (linkable) {
-    const port = dashboardPort();
     // Normalized so the link is byte-identical to the path the dashboard stores and echoes
     // back (forward slashes, upper-case drive letter) — the server would normalize a raw
     // Windows path anyway, but a stable URL keeps browser history and bookmarks from forking.

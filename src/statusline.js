@@ -18,6 +18,7 @@ import { dueStatus } from './due.js';
 import { normalizeProjectPath } from './store-path.js';
 import { authorizedUrl } from './dashboard-auth.js';
 import { dashboardPort } from './dashboard-port.js';
+import { dashboardLikelyUp } from './dashboard-liveness.js';
 
 const ESC = '[';
 const BOLD = `${ESC}1m`;
@@ -186,11 +187,16 @@ async function main() {
   // Make the whole segment a Ctrl+click hyperlink that opens the dashboard (the full,
   // clickable board — this project + global). Works in Windows Terminal, iTerm2/WezTerm/
   // Kitty/Ghostty. Skipped under tmux (mangles OSC 8) and with --no-link. If OSC 8
-  // interferes with mouse select-to-copy in your terminal, pass --no-link. The SessionStart
-  // hook starts a dashboard if none is running, so the click lands without setup.
-  const linkable = line && !flag('--no-link') && !process.env.TMUX;
+  // interferes with mouse select-to-copy in your terminal, pass --no-link.
+  //
+  // Also skipped when nothing is listening on the port. This comment used to say "the
+  // SessionStart hook starts a dashboard if none is running, so the click lands without
+  // setup" — that stopped being true when autostart became opt-in, and the link went on being
+  // drawn anyway. An underlined link to a closed port is the "looks broken because it is"
+  // failure the autostart hook was written to prevent, arriving by the other door.
+  const port = dashboardPort();
+  const linkable = line && !flag('--no-link') && !process.env.TMUX && dashboardLikelyUp(port);
   if (linkable) {
-    const port = dashboardPort();
     // ?project= scopes the page to THIS terminal's folder. One dashboard serves the whole
     // machine, so a bare "/" showed whichever project launched the server — these counts with
     // another folder's notes underneath. (An earlier build appended a #note-<id> fragment to

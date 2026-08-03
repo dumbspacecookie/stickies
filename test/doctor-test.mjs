@@ -7,7 +7,7 @@
 //
 // Hermetic via CLAUDE_CONFIG_DIR (a synthetic ~/.claude), STICKIES_DB, and a dead port.
 
-import { rmSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, cpSync } from 'node:fs';
+import { rmSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, cpSync, existsSync } from 'node:fs';
 import { freePort, scratchDir } from './_env.mjs';
 import { join } from 'node:path';
 
@@ -144,7 +144,12 @@ try {
 
   // --- dashboard down is BAD (this is the bug that made Ctrl+click do nothing) ---------
   check(one(r, 'dashboard').status === 'bad', 'no dashboard listening => bad');
-  check(/nowhere to land/.test(one(r, 'dashboard').detail), 'and it explains the consequence for the statusline link');
+  // Pinned on substance, not phrasing: it must name the statusline AND say what happens to the
+  // link. The old assertion matched the literal words "nowhere to land", which stopped being true
+  // when the statusline started withholding the link instead of offering a dead one — so the
+  // sentence had to change, and this check went red for a message that had gotten MORE accurate.
+  const down = one(r, 'dashboard').detail;
+  check(/statusline/.test(down) && /link/.test(down), 'and it explains the consequence for the statusline link');
   check(!!one(r, 'dashboard').fix, 'and offers a fix');
   check(r.ok === false, 'report.ok is false when anything is bad');
 
@@ -169,7 +174,21 @@ try {
   check(/bump "version"/.test(pi.fix), 'the fix names the version bump (a reinstall alone would not work)');
 
   check(/hooks/i.test(pi.detail), 'and says the drift reaches code the hooks execute');
-  check(/db\.js|session-start\.js|store\.js/.test(pi.detail), 'naming at least one of the drifted hook files');
+  // Named files, not just counts — "12 files differ" tells you nothing you can act on.
+  //
+  // This used to pin three specific names (db.js|session-start.js|store.js). doctor prints only
+  // the FIRST FOUR drifted files, sorted, so the assertion was really pinning alphabetical
+  // position: adding any hook-reachable source file whose name sorts before "db.js" pushed all
+  // three out of the sample and turned this red with nothing broken. (src/dashboard-liveness.js
+  // did exactly that.) What the check is actually for is that the message names real files, so
+  // that is what it now tests — cross-checked against our own src/ tree so a message naming
+  // plausible-looking nonsense still fails.
+  const named = pi.detail.match(/[\w.-]+\.m?js/g) || [];
+  const real = named.filter((f) => existsSync(join(SRC_ROOT, 'src', f)));
+  // EVERY name must be real, not merely one of them — `real.length > 0` would pass a message
+  // reading `(fnord.js, dashboard-liveness.js, …)`, which is not what the comment above claims.
+  check(named.length > 0 && real.length === named.length,
+    `naming only real drifted hook files (named: ${named.join(', ') || 'none'})`);
 
   // --- same version, but the drift does NOT touch hook code => warn, not bad -----------
   // During normal development the installed copy is behind almost constantly. A check that
@@ -262,6 +281,27 @@ try {
   r = await runDoctor({ project: PROJ });
   check(one(r, 'dashboard').status === 'ok', 'a live dashboard => ok');
   check(/pid \d+/.test(one(r, 'dashboard').detail), 'and it reports the pid so you can kill it');
+  check(find(r, 'statusline link').every((c) => !/no dashboard is running/.test(c.detail)),
+    'and the statusline-link check stops warning that none is running');
+
+  // --- ANSWERING BUT UNFINDABLE: healthy dashboard, no pidfile ------------------------
+  // The statusline decides whether to draw its link from the pidfile, never from a socket probe
+  // — it cannot afford a round trip on every prompt render. So this state is a healthy dashboard
+  // with NO link, and doctor used to report it as a plain green tick: the user sees no link,
+  // asks the one tool built to explain it, and is told everything is fine. Reachable without
+  // malice via a full or read-only $STICKIES_HOME, AV holding the path, or launching the
+  // dashboard from a shell whose STICKIES_HOME differs from Claude Code's.
+  const { pidFilePath } = await import('../src/dashboard-liveness.js');
+  const livePid = pidFilePath(DOC_PORT);
+  const saved = readFileSync(livePid, 'utf8');
+  rmSync(livePid, { force: true });
+  r = await runDoctor({ project: PROJ });
+  const orphan = one(r, 'dashboard');
+  check(orphan.status === 'warn', `answering with no pidfile => warn, not ok (got ${orphan.status})`);
+  check(/is answering/.test(orphan.detail) && /will NOT draw/.test(orphan.detail),
+    'and it says the dashboard is fine but the link is gone, which is the confusing part');
+  check(!!orphan.fix, 'and offers a fix');
+  writeFileSync(livePid, saved); // put it back so the teardown below still finds the pid
 } catch (err) {
   console.log('  FAIL  ' + (err?.stack || err));
   fail++;

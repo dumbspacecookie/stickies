@@ -2,11 +2,14 @@
 //
 // Mutations have always needed the in-page token. Reads did not: `/api/stickies`, `/api/board`,
 // `/api/projects`, `/api/command` and every page served themselves to anything that could reach
-// the port. That was defensible while the dashboard only ran when you started one by hand. It is
-// not defensible now: SessionStart brings one up automatically, it serves EVERY project this
-// machine has registered rather than one folder, and it stays up for the life of the machine. The
-// exposure window went from "the minutes I had it open" to "always", and the contents went from
-// "this project" to "all of them".
+// the port. That was defensible while a dashboard was a thing you ran in a terminal and closed.
+// It is not defensible now, and note the reason is NOT that one starts automatically — autostart
+// is opt-in (STICKIES_DASHBOARD_AUTOSTART=1) and off by default. It is that however one starts,
+// it is DETACHED: it outlives the session that spawned it, and it serves EVERY project this
+// machine has registered rather than one folder. So the exposure window went from "the minutes I
+// had it open" to "until I remember to stop it", and the contents went from "this project" to
+// "all of them". An opt-in that a user takes once, on their first day, buys the same always-on
+// surface as a default would have.
 //
 // The guard is a shared secret in a file only the user can read, exchanged once for a cookie:
 //
@@ -25,7 +28,8 @@
 // directly, and no local-only scheme can change that.
 //
 // The key is persisted rather than regenerated per launch so a cookie survives the dashboard
-// restarting, which it does on every reboot now that SessionStart starts it.
+// restarting — which it does on every reboot, since the process is detached and dies with the
+// machine rather than being stopped deliberately.
 
 import { randomBytes, timingSafeEqual, createHmac } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, openSync, closeSync, renameSync } from 'node:fs';

@@ -121,7 +121,7 @@ stickies dismiss <id> -r "done"        # clear it
 stickies dashboard --open              # local web board, open the browser
 stickies board                         # write a GitHub-viewable BOARD.md
 stickies status                        # the one-line statusline summary
-stickies sync                          # pull → merge → push through your git repo
+stickies sync                          # pull → merge → commit (push needs STICKIES_SYNC_PUSH=1)
 stickies notify                        # push the open list to Discord
 stickies init-repo                     # make notes work in cloud/mobile (repo-mode)
 ```
@@ -175,11 +175,15 @@ is a real web page, so *it* gets a full ☾/☀ toggle that flips the whole back
 page it owns, unlike the statusline.
 
 **Clickable link.** In a terminal that supports OSC-8 hyperlinks (Windows Terminal, iTerm2,
-WezTerm, Kitty, Ghostty) the segment is a **Ctrl+click link that opens the dashboard**. Two
+WezTerm, Kitty, Ghostty) the segment becomes a **Ctrl+click link that opens the dashboard**. Two
 things it needs:
 
-- The **dashboard must be running** — `stickies dashboard --detach` — or the click has nothing
-  to open.
+- A **dashboard must actually be running** — `stickies dashboard --detach`. The segment is a
+  link *only* while one is; with none running you still get the counts, just not underlined and
+  not clickable. That is deliberate: a link to a closed port looks alive, fails only when you
+  click it, and blames your browser rather than us. Autostart is off unless you ask for it, so
+  **no link is the default state on a fresh install**. If the segment is not clickable and you
+  expected it to be, `stickies doctor` says which of these two it is.
 - On **Windows Terminal**, Claude Code doesn't auto-detect hyperlink support, so set
   `FORCE_HYPERLINK=1` in your environment *before launching Claude Code* (e.g.
   `setx FORCE_HYPERLINK 1`, then restart). Without it the segment renders but isn't clickable.
@@ -257,7 +261,13 @@ checkout lives at a different path on each. Merge is whole-record last-writer-wi
 — conflict-free and order-independent.
 
 **Auto-sync** (also opt-in): set `STICKIES_AUTO_SYNC=1` alongside `STICKIES_SYNC_REPO` and Stickies
-pulls on session start and pushes when a turn captures a note. Unset, nothing syncs on its own.
+pulls on session start and **commits** when a turn captures a note. Unset, nothing syncs on its own.
+
+**Pushing is a third opt-in.** Capturing a note commits to your sync repo and stops there —
+`STICKIES_SYNC_PUSH=1` is what makes it `git push` as well. Without it your notes are versioned
+locally and **never leave the machine**, so a second machine will never see them. The push runs
+bare (no remote, no refspec) so your own git config decides where it goes; deriving that
+ourselves went wrong three separate ways, once writing a stray branch onto a shared `main`.
 
 ---
 

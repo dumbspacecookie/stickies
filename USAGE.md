@@ -60,7 +60,7 @@ and `/btw` is the one you'll reach for 90% of the time.
 /stickies dashboard        # the web UI
 /stickies dismiss <id>     # mark one done
 /stickies add <text>       # write one by hand
-/stickies sync             # pull/merge/push through your own git repo
+/stickies sync             # pull/merge/commit (push needs STICKIES_SYNC_PUSH=1)
 ```
 
 That is the whole set — the slash command takes nothing else. For anything narrower, use the
@@ -269,9 +269,14 @@ export STICKIES_AUTO_SYNC=1
 ```
 
 Set it at a scope every terminal inherits (User env var / shell profile), not just one shell —
-otherwise only that terminal syncs. With both set, Stickies pulls at session start and pushes
+otherwise only that terminal syncs. With both set, Stickies pulls at session start and **commits**
 when a turn captures a note. Manually: `/stickies sync`. Merge is whole-record last-writer-wins
 by timestamp, so two machines can't corrupt each other.
+
+**For a second machine to ever see those notes you need a third variable: `STICKIES_SYNC_PUSH=1`.**
+Without it every sync ends at `commit` and prints `push: skipped` — the notes are versioned on
+this machine and nowhere else. This catches people who set the first two, watch `stickies doctor`
+report `auto-sync ON`, and reasonably assume that means their notes are somewhere else too.
 
 If that repo has **no remote**, sync is a local backup. Give it a remote and a second machine
 (or your phone via Remote Control — see [PHONE.md](PHONE.md)) sees the same board. Sync is the

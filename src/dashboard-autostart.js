@@ -12,8 +12,7 @@
 
 import { spawn } from 'node:child_process';
 import { get, request as httpRequest } from 'node:http';
-import { readFileSync, rmSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -40,32 +39,12 @@ export function headlessEnvironment() {
   return null;
 }
 
-// Where the dashboard records "this instance is mine", so --stop has a claim to check that does
-// not come from the port-holder itself. Shared by the writer (src/dashboard.js) and the reader.
-export function pidFilePath(port = dashboardPort()) {
-  return join(process.env.STICKIES_HOME || homedir() + '/.stickies', `dashboard-${port}.pid`);
-}
-
-// Read it back, in either format. `{ pid, nonce }` is what a current dashboard writes; a bare
-// number is what one from before the nonce wrote, and is reported as legacy so the caller can
-// refuse rather than silently accept the weaker claim.
-export function readPidFile(port = dashboardPort()) {
-  let raw;
-  try {
-    raw = readFileSync(pidFilePath(port), 'utf8').trim();
-  } catch {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && Number.isInteger(parsed.pid) && typeof parsed.nonce === 'string' && parsed.nonce) {
-      return { pid: parsed.pid, nonce: parsed.nonce };
-    }
-  } catch { /* not JSON — fall through to the legacy form */ }
-  const pid = Number(raw);
-  if (Number.isInteger(pid) && pid > 0) return { pid, nonce: null, legacy: true };
-  return null;
-}
+// The pidfile readers moved to dashboard-liveness.js so the statuslines can ask "is one up?"
+// without importing this module — which pulls in child_process and http for a question that only
+// needs two syscalls, on a path that re-runs on every prompt render. Re-exported because
+// dashboard.js and --stop have always imported them from here.
+export { pidFilePath, readPidFile, dashboardLikelyUp } from './dashboard-liveness.js';
+import { pidFilePath, readPidFile } from './dashboard-liveness.js';
 
 // OPT-IN. Installing a notes plugin must not start a web server on someone's machine, so the
 // default is off and STICKIES_DASHBOARD_AUTOSTART=1 turns it on. It used to be the other way

@@ -24,6 +24,9 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveDbPath } from './db.js';
 import { engineStamp, declaredStamp } from './engine-stamp.js';
+// Static: this module is two syscalls and imports only dashboard-port.js, so it costs nothing to
+// pull in eagerly, and both the dashboard check and the statusline-link check need it.
+import { dashboardLikelyUp, pidFilePath } from './dashboard-liveness.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const ROOT = join(HERE, '..'); // the copy of Stickies actually executing
@@ -68,6 +71,22 @@ async function checkDashboard() {
       : readAuthKey()
         ? ' — reads need an authorized link: `stickies dashboard --link`'
         : ' — no read key on disk yet; restart the dashboard to write one';
+    // Answering, but is the statusline able to TELL? The statusline decides whether to draw its
+    // link from the pidfile, never from this probe — it cannot afford a socket round trip on every
+    // prompt render. So a dashboard can be perfectly healthy and still have no link, and before
+    // this check doctor reported that state as a plain green tick: the user sees no link, asks the
+    // one tool built to explain it, and is told everything is fine. That is the same
+    // "broken with nothing telling you why" failure the liveness gate exists to remove, pointing
+    // the other way. Reachable by a full or read-only $STICKIES_HOME, by AV holding the path, or
+    // by starting the dashboard from a shell whose STICKIES_HOME differs from Claude Code's.
+    if (!dashboardLikelyUp(port)) {
+      return check('dashboard', 'warn',
+        `http://127.0.0.1:${port}/ is answering (pid ${health.pid}), but no usable pidfile is at ` +
+        `${pidFilePath(port)} — so the statusline cannot tell it is up and will NOT draw its ` +
+        `Ctrl+click link, even though the dashboard is healthy${how}`,
+        `restart it (\`stickies dashboard --stop\` then \`--detach\`) from a shell with the same ` +
+        `STICKIES_HOME Claude Code uses, and check that directory is writable`);
+    }
     return check('dashboard', 'ok',
       `http://127.0.0.1:${port}/ — pid ${health.pid}, launched from ${health.project || '(global view)'}` +
       ` (stop it with \`stickies dashboard --stop\`)${how}`);
@@ -76,7 +95,7 @@ async function checkDashboard() {
     return check('dashboard', 'bad', `port ${port} is held by something that isn't Stickies`,
       `free the port, or set STICKIES_DASHBOARD_PORT to another one`);
   }
-  return check('dashboard', 'bad', `nothing listening on 127.0.0.1:${port} — the statusline's Ctrl+click has nowhere to land`,
+  return check('dashboard', 'bad', `nothing listening on 127.0.0.1:${port} — so the statusline renders its counts as plain text rather than a Ctrl+click link (it stopped offering a link it knows will not land)`,
     autostartEnabled()
       ? 'start one now with `stickies dashboard --detach` (a new Claude session would also start it)'
       : 'autostart is off by default — run `stickies dashboard --detach`, or set STICKIES_DASHBOARD_AUTOSTART=1 to have sessions start one');
@@ -324,6 +343,16 @@ function checkStatusline() {
   }
   if (process.env.TMUX) {
     out.push(check('statusline link', 'warn', 'running under tmux, which mangles OSC-8 — the link is deliberately skipped'));
+  }
+  // The newest reason, and on a default install the MOST COMMON one — autostart is opt-in, so
+  // "no dashboard" is the steady state until someone asks for one. This list enumerated the two
+  // older reasons and would have sent a user hunting FORCE_HYPERLINK for a link that was missing
+  // because there was nothing to link to.
+  if (!dashboardLikelyUp()) {
+    out.push(check('statusline link', 'warn',
+      'no dashboard is running, so the segment renders as plain text rather than a link — this is the ' +
+      'default state, not a fault',
+      'want the link? `stickies dashboard --detach`, or STICKIES_DASHBOARD_AUTOSTART=1 to have sessions start one'));
   }
   return out;
 }

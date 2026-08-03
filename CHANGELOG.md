@@ -2,6 +2,55 @@
 
 Notable changes to Stickies. Versions follow the npm package `stickies-mcp`.
 
+## 0.14.2 — 2026-08-03
+
+One user-visible behaviour change, and it is a removal: **the statusline segment is now a
+Ctrl+click link only while a dashboard is actually running.** If you have not opted into autostart
+and have not run `stickies dashboard --detach`, the segment still shows your counts but is no
+longer underlined or clickable. Nothing that worked has stopped working — the link only disappears
+where clicking it produced `ERR_CONNECTION_REFUSED`.
+
+### Fixed
+
+- **The statusline linked to a dashboard that was not there.** Both statuslines wrapped their
+  segment in an OSC 8 hyperlink unconditionally, on a premise their own comments stated: *"the
+  SessionStart hook starts a dashboard if none is running, so the click lands without setup."*
+  That stopped being true when autostart became opt-in in 0.14.0, and nothing revisited the link.
+  The result was a link that looked alive, failed only when clicked, and blamed the browser.
+
+  It recurred rather than merely happening, because the dashboard is detached: it outlives every
+  session but no reboot, and it leaves its pidfile behind when it dies that way. Start one by
+  hand, it works for days, reboot, tombstone again. A check that only asked whether the pidfile
+  exists would therefore have passed in exactly the broken case.
+
+- **`stickies doctor` reported a green dashboard that the statusline could not see.** A healthy,
+  listening dashboard whose pidfile write failed — a full or read-only `$STICKIES_HOME`, AV
+  holding the path, or a dashboard launched from a shell with a different `$STICKIES_HOME` — gets
+  no statusline link for its whole lifetime. Doctor called that state fine. It is now a warning
+  that names the consequence. The statusline-link check also lists "no dashboard is running",
+  which on a default install is the most common reason the link is absent, and previously would
+  have sent you hunting `FORCE_HYPERLINK` for a link that had nothing to point at.
+
+- **A corrupt `{"pid":0}` pidfile read as permanently alive.** `process.kill(0, 0)` never fails —
+  on POSIX pid 0 addresses the caller's own process group — so unlike a recycled pid, which dies
+  eventually, that false positive never self-healed. The guard now matches the one the legacy
+  pidfile format always had. The pidfile read also refuses non-regular files and anything over
+  4 KB: on POSIX, opening a FIFO blocks until a writer arrives, and this read now happens on the
+  prompt-render path rather than only in `--stop`.
+
+### Documentation
+
+- Corrected every place that still described the pre-0.14.0 always-on dashboard, including two
+  **security rationales** arguing from that retired premise. The real reason the read gate exists
+  is that a dashboard is detached and machine-wide however it starts, so the exposure window is
+  "until you stop it" whether or not anyone opted into autostart.
+- **`STICKIES_SYNC_PUSH` was documented nowhere.** Push became opt-in in 0.14.0, which means
+  auto-sync commits your notes locally and never sends them: a second machine sees nothing, and
+  `stickies doctor` reporting `auto-sync ON` reads as reassurance it was not giving. The `sync`
+  command's own `--help` promised "(pull, merge, push)" while printing `push: skipped`. Every
+  place claiming notes are pushed now says commit, and the variable is documented. **Behaviour is
+  unchanged — if you rely on cross-machine sync, set `STICKIES_SYNC_PUSH=1`.**
+
 ## 0.14.1 — 2026-08-01
 
 Two security fixes, both surfaced by the same review that cleared 0.14.0 and both deliberately left

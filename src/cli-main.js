@@ -171,7 +171,7 @@ program
 // stickies sync — git pull -> merge -> export -> commit -> push
 program
   .command('sync')
-  .description('Sync stickies through a git repo you own (pull, merge, push).')
+  .description('Sync stickies through a git repo you own (pull, merge, commit; push only with STICKIES_SYNC_PUSH=1).')
   .option('--repo <path>', 'Git working copy holding the sync file (or set $STICKIES_SYNC_REPO).')
   .action(async (opts) => {
     const { sync } = await import('./git-sync.js');

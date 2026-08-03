@@ -595,7 +595,20 @@ server.listen(port, '127.0.0.1', () => {
     const cleanup = () => { try { rmSync(pidFile, { force: true }); } catch { /* nothing to do */ } };
     process.on('exit', cleanup);
     for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { cleanup(); process.exit(0); });
-  } catch { /* a dashboard that cannot write a pidfile still serves; --stop just gets stricter */ }
+  } catch {
+    // A dashboard that cannot write a pidfile still SERVES — that has not changed, and swallowing
+    // here is still right: refusing to start because of a bookkeeping file would be worse.
+    //
+    // What HAS changed is the cost. This used to mean only "--stop gets stricter". The statusline
+    // now decides whether to draw its link by reading this file, so a healthy, listening dashboard
+    // whose write failed here silently gets NO statusline link for its whole lifetime — the exact
+    // symptom the liveness gate was added to remove, arriving by a third door. Reachable without
+    // any malice: a full or read-only $STICKIES_HOME, or AV holding the path.
+    //
+    // Deliberately still not fatal, and deliberately not announced from here (this process may
+    // have no terminal). `stickies doctor` carries the detection instead — see checkDashboard,
+    // which flags "answering but no pidfile" rather than reporting a green dashboard.
+  }
   const target = PROJECT || '(global view)';
   // The printed URL carries the key: a bare one now answers 401, and a startup banner that hands
   // you a link you cannot open is worse than no banner.
