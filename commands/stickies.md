@@ -30,7 +30,7 @@ at `${CLAUDE_PLUGIN_ROOT}/src/cli.js`. Dispatch on `$ARGUMENTS`:
   the URL. Run it detached so the command returns immediately:
   `node --disable-warning=ExperimentalWarning "${CLAUDE_PLUGIN_ROOT}/src/cli.js" dashboard --detach`
 
-- **`sync`** → sync stickies through the user's own git repo (pull, merge, push).
+- **`sync`** → sync stickies through the user's own git repo (pull, merge, commit; it pushes only if `STICKIES_SYNC_PUSH=1` is set).
   Requires `$STICKIES_SYNC_REPO` to point at a git working copy they own; if it errors
   with that message, relay it — do not configure a repo for them:
   `node --disable-warning=ExperimentalWarning "${CLAUDE_PLUGIN_ROOT}/src/cli.js" sync`

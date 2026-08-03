@@ -248,7 +248,7 @@ feature that ever touches the network, and only once you point it at a remote.
 
 ```sh
 export STICKIES_SYNC_REPO=/path/to/your/stickies-data   # a git clone you control
-stickies sync           # pull → merge (last-writer-wins) → export → commit → push
+stickies sync           # pull → merge (last-writer-wins) → export → commit (push: STICKIES_SYNC_PUSH=1)
 
 # or offline, through any file channel:
 stickies export -f notes.json
@@ -354,7 +354,7 @@ other with no sync step.
 | Slash command | `commands/stickies.md` | `/stickies …` |
 | CLI | `src/cli.js` | backs the slash command; usable directly |
 | Store / DB | `src/store.js`, `src/db.js` | CRUD + schema + TTL + dedup + provenance |
-| Sync | `src/sync.js`, `src/git-sync.js` | export/import + git pull→merge→push |
+| Sync | `src/sync.js`, `src/git-sync.js` | export/import + git pull→merge→commit (push is opt-in) |
 | Redaction | `src/redact.js` | scrubs secrets from content on write |
 | Repo-mode | `src/repo-mode/` | committed store + hooks + reconcile Action for cloud/mobile |
 

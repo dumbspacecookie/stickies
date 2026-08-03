@@ -40,16 +40,20 @@ where clicking it produced `ERR_CONNECTION_REFUSED`.
 
 ### Documentation
 
-- Corrected every place that still described the pre-0.14.0 always-on dashboard, including two
-  **security rationales** arguing from that retired premise. The real reason the read gate exists
-  is that a dashboard is detached and machine-wide however it starts, so the exposure window is
-  "until you stop it" whether or not anyone opted into autostart.
+- Restated the **security rationale** for the dashboard's read gate, which argued from a premise
+  that retired in 0.14.0 ("gated since the dashboard became always-on"). The gate is still right;
+  the reason is that a dashboard is **detached** and machine-wide however it starts, so the
+  exposure window is "until you stop it" whether or not anyone opted into autostart. An opt-in
+  taken once, on your first day, buys the same always-on surface a default would have.
 - **`STICKIES_SYNC_PUSH` was documented nowhere.** Push became opt-in in 0.14.0, which means
   auto-sync commits your notes locally and never sends them: a second machine sees nothing, and
   `stickies doctor` reporting `auto-sync ON` reads as reassurance it was not giving. The `sync`
-  command's own `--help` promised "(pull, merge, push)" while printing `push: skipped`. Every
-  place claiming notes are pushed now says commit, and the variable is documented. **Behaviour is
-  unchanged — if you rely on cross-machine sync, set `STICKIES_SYNC_PUSH=1`.**
+  command's own `--help` promised "(pull, merge, push)" while printing `push: skipped`. The
+  variable is now documented, and `README.md`, `USAGE.md`, `SECURITY.md` (including its egress
+  table) and `commands/stickies.md` all say **commit** where they used to say push. Two claims are
+  deliberately left saying push because they are true: **repo-mode** pushes through its own engine
+  and is not gated by this variable. **Behaviour is unchanged — if you rely on cross-machine sync,
+  set `STICKIES_SYNC_PUSH=1`.**
 
 ## 0.14.1 — 2026-08-01
 
